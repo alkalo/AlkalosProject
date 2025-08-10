@@ -132,7 +132,8 @@ def main() -> None:  # pragma: no cover - CLI entry point
 
     logger.info("Starting %s bot for %s", args.mode, args.symbol)
     try:
-        strat = SignalStrategy(args.symbol)
+        costs = (FEE_RATE + SLIPPAGE) * 2
+        strat = SignalStrategy(args.symbol, costs=costs)
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.exception("Failed to load strategy: %s", exc)
         notify(f"Failed to load strategy: {exc}")

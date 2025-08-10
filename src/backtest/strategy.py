@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Any
 
 import joblib
 import numpy as np
@@ -36,29 +36,37 @@ class SignalStrategy:
 
     def __init__(
         self,
-        symbol: str,
+        symbol: str | Any,
         model_dir: str = "models",
         *,
         buy_thr: float = 0.6,
         sell_thr: float = 0.4,
         min_edge: float = 0.02,
     ) -> None:
-        self.symbol = symbol
         self.buy_thr = buy_thr
         self.sell_thr = sell_thr
         self.min_edge = min_edge
 
-        base = Path(model_dir) / symbol
-        self.model = joblib.load(base / "model.pkl")
-        scaler_path = base / "scaler.pkl"
-        self.scaler = joblib.load(scaler_path) if scaler_path.exists() else None
-        with open(base / "features.json", "r", encoding="utf-8") as fh:
-            self.feature_names: List[str] = json.load(fh)
-        # Presence of model.h5 marks an LSTM model which requires special
-        # treatment of input shapes.
-        self.is_lstm = (base / "model.h5").exists()
+        if isinstance(symbol, str):
+            self.symbol = symbol
+            base = Path(model_dir) / symbol
+            self.model = joblib.load(base / "model.pkl")
+            scaler_path = base / "scaler.pkl"
+            self.scaler = joblib.load(scaler_path) if scaler_path.exists() else None
+            with open(base / "features.json", "r", encoding="utf-8") as fh:
+                self.feature_names: List[str] = json.load(fh)
+            # Presence of model.h5 marks an LSTM model which requires special
+            # treatment of input shapes.
+            self.is_lstm = (base / "model.h5").exists()
+        else:
+            # For testing purposes allow passing a model instance directly.
+            self.symbol = "CUSTOM"
+            self.model = symbol
+            self.scaler = None
+            self.feature_names = []
+            self.is_lstm = False
 
-    def _predict_proba_last(self, X: np.ndarray) -> float:
+    def predict_proba_last(self, X: np.ndarray) -> float:
         """Return probability of the positive class for the last sample."""
         proba = self.model.predict_proba(X)
         proba = np.asarray(proba)
@@ -76,7 +84,7 @@ class SignalStrategy:
             X = self.scaler.transform(X)
         if self.is_lstm:
             X = X.reshape(1, X.shape[0], X.shape[1])
-        proba = self._predict_proba_last(X)
+        proba = self.predict_proba_last(X)
         if proba >= self.buy_thr and (proba - 0.5) >= self.min_edge:
             return "BUY"
         if proba <= self.sell_thr and (0.5 - proba) >= self.min_edge:

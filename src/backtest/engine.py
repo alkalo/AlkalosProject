@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import sqrt
 from typing import List, Tuple
 
 import pandas as pd
@@ -53,32 +52,37 @@ def backtest_spot(
     position = 0.0
     equity_curve: list[float] = []
     trades: TradeList = []
-    trade_profits: list[float] = []
-
-    entry_cost = 0.0
-    stop_price = None
-    # Track entry prices to compute PnL per round-trip
-    entry_prices: List[float] = []
     trade_pnls: List[float] = []
 
+    entry_price: float | None = None
 
     for ts, row in df.iterrows():
         price = float(row["close"])
         signal = row.get("signal", "HOLD")
 
+        # Check stop loss first
+        if position > 0 and stop_loss is not None and entry_price is not None:
+            if price <= entry_price * (1 - stop_loss):
+                cash += position * price * (1 - fee)
+                trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
+                trades.append(Trade(ts, "SELL", price, position))
+                position = 0.0
+                entry_price = None
 
-        if signal == "BUY" and cash >= price * (1 + fee):
-            qty = 1.0
-            cash -= price * (1 + fee)
+        if signal == "BUY" and cash >= price * (1 + fee) and position == 0.0:
+            qty = cash * risk_per_trade / (price * (1 + fee))
+            cash -= qty * price * (1 + fee)
             position += qty
-            entry_prices.append(price)
+            entry_price = price
             trades.append(Trade(ts, "BUY", price, qty))
-        elif signal == "SELL" and position >= 1.0:
-            cash += price * (1 - fee)
-            entry_price = entry_prices.pop(0) if entry_prices else price
+        elif signal == "SELL" and position > 0.0:
+            cash += position * price * (1 - fee)
+            if entry_price is None:
+                entry_price = price
             trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
-            trades.append(Trade(ts, "SELL", price, 1.0))
-            position -= 1.0
+            trades.append(Trade(ts, "SELL", price, position))
+            position = 0.0
+            entry_price = None
 
         equity_curve.append(cash + position * price)
 
@@ -88,7 +92,7 @@ def backtest_spot(
     pnl = final_equity - initial_cash
     return_pct = pnl / initial_cash if initial_cash else 0.0
     max_drawdown = float((equity.cummax() - equity).max()) if not equity.empty else 0.0
-    total_trades = len(trades)
+    num_trades = len(trade_pnls)
     if trade_pnls:
         win_rate = sum(p > 0 for p in trade_pnls) / len(trade_pnls)
         avg_trade = float(sum(trade_pnls) / len(trade_pnls))
@@ -101,7 +105,7 @@ def backtest_spot(
         "pnl": pnl,
         "return_pct": return_pct,
         "max_drawdown": max_drawdown,
-        "total_trades": total_trades,
+        "num_trades": num_trades,
         "win_rate": win_rate,
         "avg_trade": avg_trade,
     }

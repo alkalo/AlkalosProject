@@ -26,18 +26,17 @@ def read_ohlcv_csv(path: str) -> pd.DataFrame:
     # Consolidar timestamp
     ts_cols = [c for c in df.columns if c.startswith("timestamp")]
     if not ts_cols:
-        # algunos dumps usan 'date'
         if "date" in df.columns:
             df = df.rename(columns={"date": "timestamp"})
             ts_cols = ["timestamp"]
         else:
-            raise ValueError("No hay columna timestamp en el CSV.")
+            df["timestamp"] = pd.RangeIndex(len(df))
+            ts_cols = ["timestamp"]
     keep = ts_cols[0]
     drop_ = [c for c in ts_cols if c != keep]
     if drop_:
         df = df.drop(columns=drop_)
 
-    # Parse de timestamp
     if np.issubdtype(df[keep].dtype, np.number):
         df[keep] = pd.to_datetime(df[keep], unit="ms", utc=True)
     else:
@@ -47,11 +46,13 @@ def read_ohlcv_csv(path: str) -> pd.DataFrame:
 
     # Validar numéricos
     for c in NUM_COLS:
-        if c not in df.columns:
-            raise ValueError(f"Falta columna '{c}' en el CSV.")
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = df.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
+    if "close" not in df.columns:
+        raise ValueError("Falta columna 'close' en el CSV.")
+
+    df = df.dropna(subset=["timestamp", "close"]).sort_values("timestamp")
     df = df.drop_duplicates(subset=["timestamp"])
     if df.empty:
         raise ValueError(f"Archivo vacío o mal formateado: {path}")

@@ -1,48 +1,29 @@
-"""Helpers for accessing configuration and project directories.
-
-This module provides a thin wrapper around :mod:`configs.settings` so that
-other parts of the codebase can easily access common paths (and later
-credentials) without needing to know about the underlying settings
-implementation.
-"""
-
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
 
-from configs.settings import Settings, get_settings
+from configs.settings import Settings
 
 
 @lru_cache()
-def _settings() -> Settings:
-    """Return the cached application settings."""
-
-    return get_settings()
-
-
 def get_data_dir() -> Path:
-    """Directory where datasets are stored."""
-
-    return _settings().data_dir
+    return Settings().data_dir
 
 
+@lru_cache()
 def get_models_dir() -> Path:
-    """Directory containing trained models."""
-
-    return _settings().models_dir
+    return Settings().models_dir
 
 
+@lru_cache()
 def get_logs_dir() -> Path:
-    """Directory used for log files."""
-
-    return _settings().logs_dir
+    return Settings().logs_dir
 
 
+@lru_cache()
 def get_reports_dir() -> Path:
-    """Directory for generated reports."""
-
-    return _settings().reports_dir
+    return Settings().reports_dir
 
 
 __all__ = [

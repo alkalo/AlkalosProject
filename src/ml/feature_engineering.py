@@ -3,6 +3,36 @@
 from __future__ import annotations
 
 import pandas as pd
+from typing import Tuple
+
+
+def make_lagged_features(
+    series: pd.Series, window: int
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """Create lagged features for a univariate series.
+
+    Parameters
+    ----------
+    series:
+        Input time series to lag. The current value will be dropped so that
+        each row only contains information strictly from the past.
+    window:
+        Number of past observations to include as features.
+
+    Returns
+    -------
+    X, y:
+        Feature ``DataFrame`` where each column represents a lagged value and
+        the corresponding target ``Series`` aligned such that ``y_t`` depends
+        only on values strictly prior to ``t``.
+    """
+    data = {f"lag_{i}": series.shift(i) for i in range(1, window + 1)}
+    X = pd.DataFrame(data)
+    y = series.copy()
+    df = pd.concat([X, y], axis=1).dropna()
+    X = df[[f"lag_{i}" for i in range(1, window + 1)]]
+    y = df[series.name]
+    return X, y
 
 
 def add_simple_returns(df: pd.DataFrame, price_col: str = "close", *, col_name: str = "return") -> pd.DataFrame:

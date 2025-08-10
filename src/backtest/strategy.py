@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import json
@@ -67,6 +68,7 @@ class SignalStrategy:
             proba = np.column_stack([1 - proba[:, 0], proba[:, 0]])
         return proba[-1, 1]
 
+
     def generate_signal(self, df_window: pd.DataFrame) -> Literal["BUY", "SELL", "HOLD"]:
         """Generate trading signal from a window of data."""
         X = df_window[self.feature_names].values
@@ -80,3 +82,4 @@ class SignalStrategy:
         if proba <= self.sell_thr and (0.5 - proba) >= self.min_edge:
             return "SELL"
         return "HOLD"
+

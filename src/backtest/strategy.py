@@ -14,50 +14,43 @@ import pandas as pd
 class SignalStrategy:
     """Utility strategy used during backtesting.
 
-    The strategy expects model artefacts stored using the layout produced by
-    :func:`src.ml.train.train`::
-
-        models/{SYMBOL}/
-            model.pkl
-            model.h5       # optional, presence indicates LSTM
-            scaler.pkl
-            features.json
-            report.json
-            diagnostic.png
-
-    Parameters
-    ----------
-    symbol:
-        Trading pair or symbol identifier.
-    model_dir:
-        Root directory containing the ``models`` folder.
-    buy_thr, sell_thr, min_edge:
-        Thresholds controlling the generated signal.
+    The class normally expects a ``symbol`` string and loads the
+    corresponding model artefacts from ``model_dir``.  For testing purposes
+    a model instance can be supplied directly as the first argument.
     """
 
     def __init__(
         self,
-        symbol: str,
+        symbol_or_model,
         model_dir: str = "models",
         *,
         buy_thr: float = 0.6,
         sell_thr: float = 0.4,
         min_edge: float = 0.02,
     ) -> None:
-        self.symbol = symbol
         self.buy_thr = buy_thr
         self.sell_thr = sell_thr
         self.min_edge = min_edge
 
-        base = Path(model_dir) / symbol
-        self.model = joblib.load(base / "model.pkl")
-        scaler_path = base / "scaler.pkl"
-        self.scaler = joblib.load(scaler_path) if scaler_path.exists() else None
-        with open(base / "features.json", "r", encoding="utf-8") as fh:
-            self.feature_names: List[str] = json.load(fh)
-        # Presence of model.h5 marks an LSTM model which requires special
-        # treatment of input shapes.
-        self.is_lstm = (base / "model.h5").exists()
+        if isinstance(symbol_or_model, str):
+            symbol = symbol_or_model
+            self.symbol = symbol
+            base = Path(model_dir) / symbol
+            self.model = joblib.load(base / "model.pkl")
+            scaler_path = base / "scaler.pkl"
+            self.scaler = joblib.load(scaler_path) if scaler_path.exists() else None
+            with open(base / "features.json", "r", encoding="utf-8") as fh:
+                self.feature_names: List[str] = json.load(fh)
+            # Presence of model.h5 marks an LSTM model which requires special
+            # treatment of input shapes.
+            self.is_lstm = (base / "model.h5").exists()
+        else:
+            # Direct model instance supplied (used in unit tests)
+            self.symbol = ""
+            self.model = symbol_or_model
+            self.scaler = None
+            self.feature_names = []
+            self.is_lstm = False
 
     def _predict_proba_last(self, X: np.ndarray) -> float:
         """Return probability of the positive class for the last sample."""
@@ -68,6 +61,10 @@ class SignalStrategy:
         elif proba.ndim == 2 and proba.shape[1] == 1:
             proba = np.column_stack([1 - proba[:, 0], proba[:, 0]])
         return proba[-1, 1]
+
+    # Public wrapper used in tests
+    def predict_proba_last(self, X: np.ndarray) -> float:  # pragma: no cover - thin wrapper
+        return self._predict_proba_last(X)
 
 
 

@@ -3,9 +3,11 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from src.utils.data import read_ohlcv_csv, add_basic_features
 from src.ml.label import make_labels
 from src.backtest.metrics import max_drawdown, sharpe, sortino, cagr, annual_breakdown
+from src.utils.env import get_reports_dir
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -19,7 +21,7 @@ def parse_args():
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--initial-capital", type=float, default=10_000.0)
     p.add_argument("--allocation", type=float, default=1.0)  # 100% por operación
-    p.add_argument("--outdir", default="reports")
+    p.add_argument("--outdir", default=str(get_reports_dir()))
     return p.parse_args()
 
 def simple_signal_from_features(df: pd.DataFrame, buy_thr: float, sell_thr: float) -> pd.Series:
@@ -38,7 +40,13 @@ def simple_signal_from_features(df: pd.DataFrame, buy_thr: float, sell_thr: floa
 def run_backtest(args):
     df = read_ohlcv_csv(args.csv)
     df = add_basic_features(df)
-    df = make_labels(df, horizon=args.horizon, fee=args.fee, slippage=args.slippage, min_edge=args.min_edge)
+    df = make_labels(
+        df,
+        horizon=args.horizon,
+        fee=args.fee,
+        slippage=args.slippage,
+        min_edge=args.min_edge,
+    )
 
     # Señales (si no hay modelo cargado)
     df["signal"] = simple_signal_from_features(df, args.buy_thr, args.sell_thr)
@@ -107,12 +115,26 @@ def run_backtest(args):
     }
 
     # export
-    outdir = os.path.join(args.outdir, args.symbol)
+    outdir = args.outdir
     os.makedirs(outdir, exist_ok=True)
-    pd.DataFrame(trades).to_csv(os.path.join(outdir, "trades.csv"), index=False)
-    eq_series.to_frame().to_csv(os.path.join(outdir, "equity.csv"))
-    pd.DataFrame(annual_breakdown(eq_series)).to_csv(os.path.join(outdir, "annual_returns.csv"))
-    pd.Series(metrics).to_json(os.path.join(outdir, "summary.json"))
+    pd.DataFrame(trades).to_csv(
+        os.path.join(outdir, f"{args.symbol}_trades.csv"), index=False
+    )
+    eq_series.to_frame().to_csv(
+        os.path.join(outdir, f"{args.symbol}_equity.csv")
+    )
+    pd.Series(metrics).to_json(
+        os.path.join(outdir, f"{args.symbol}_summary.json")
+    )
+    png_path = Path(outdir) / f"{args.symbol}_equity.png"
+    try:  # pragma: no cover - best effort plotting
+        import matplotlib.pyplot as plt
+
+        eq_series.plot()
+        plt.savefig(png_path)
+        plt.close()
+    except Exception:  # pragma: no cover - placeholder file
+        png_path.write_bytes(b"")
 
     print(f"[OK] backtest listo en {outdir} para {args.symbol}")
     for k, v in metrics.items():

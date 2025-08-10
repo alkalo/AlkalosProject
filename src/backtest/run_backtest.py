@@ -1,11 +1,19 @@
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import pandas as pd
 
 from .strategy import SignalStrategy
 from . import engine
+
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_dirs(path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,28 +32,56 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    df = pd.read_csv(args.csv, parse_dates=True)
-
-    strategy = SignalStrategy(
-        args.symbol,
-        model_dir="models",
-        buy_thr=args.buy_thr,
-        sell_thr=args.sell_thr,
-        min_edge=args.min_edge,
+    _ensure_dirs("logs/run_backtest.log")
+    logging.basicConfig(
+        filename="logs/run_backtest.log",
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    logger.info("Starting backtest for %s", args.symbol)
+    try:
+        df = pd.read_csv(args.csv, parse_dates=True)
+    except FileNotFoundError:
+        logger.error("CSV file not found: %s", args.csv)
+        return
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to read %s: %s", args.csv, exc)
+        return
+
+    try:
+        strategy = SignalStrategy(
+            args.symbol,
+            model_dir="models",
+            buy_thr=args.buy_thr,
+            sell_thr=args.sell_thr,
+            min_edge=args.min_edge,
+        )
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to initialise strategy: %s", exc)
+        return
+
+    logger.info("Generating signals")
     signals = []
     for i in range(len(df)):
         window = df.iloc[: i + 1]
-        signals.append(strategy.generate_signal(window))
+        try:
+            signals.append(strategy.generate_signal(window))
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.exception("Signal generation failed: %s", exc)
+            return
     df["signal"] = signals
 
-    summary, equity, trades = engine.backtest_spot(
-        df,
-        fee=args.fee,
-        slippage=args.slippage,
-        initial_cash=args.initial_cash,
-    )
+    try:
+        summary, equity, trades = engine.backtest_spot(
+            df,
+            fee=args.fee,
+            slippage=args.slippage,
+            initial_cash=args.initial_cash,
+        )
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Backtest failed: %s", exc)
+        return
 
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
@@ -54,22 +90,28 @@ def main() -> None:
     equity_path = reports_dir / f"{args.symbol}_equity.png"
     trades_path = reports_dir / f"{args.symbol}_trades.csv"
 
-    with open(summary_path, "w", encoding="utf-8") as fh:
-        json.dump(summary, fh, indent=2)
+    logger.info("Writing reports to %s", reports_dir)
+    try:
+        with open(summary_path, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, indent=2)
+        trades.to_csv(trades_path, index=False)
 
-    trades.to_csv(trades_path, index=False)
+        import matplotlib.pyplot as plt
 
-    import matplotlib.pyplot as plt
+        plt.figure(figsize=(10, 4))
+        if hasattr(equity, "plot"):
+            equity.plot(ax=plt.gca())
+        else:
+            plt.plot(equity)
+        plt.title(f"{args.symbol} Equity Curve")
+        plt.tight_layout()
+        plt.savefig(equity_path)
+        plt.close()
+    except OSError as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to write report files: %s", exc)
+        return
 
-    plt.figure(figsize=(10, 4))
-    if hasattr(equity, "plot"):
-        equity.plot(ax=plt.gca())
-    else:
-        plt.plot(equity)
-    plt.title(f"{args.symbol} Equity Curve")
-    plt.tight_layout()
-    plt.savefig(equity_path)
-    plt.close()
+    logger.info("Backtest completed for %s", args.symbol)
 
 
 if __name__ == "__main__":

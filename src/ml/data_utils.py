@@ -1,8 +1,8 @@
 # src/ml/data_utils.py
 from __future__ import annotations
-import pandas as pd
+
 import numpy as np
-from typing import Tuple, Dict, Any, List
+import pandas as pd
 
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["timestamp", "date", "Datetime", "Date"]:
@@ -60,54 +60,107 @@ def _build_tech_features(df: pd.DataFrame, window: int) -> pd.DataFrame:
     std20 = close.rolling(20, min_periods=20).std()
     out["bb_up_20"] = out["bb_mid_20"] + 2 * std20
     out["bb_dn_20"] = out["bb_mid_20"] - 2 * std20
-    tr = (pd.concat([high, close.shift()], axis=1).max(axis=1) -
-          pd.concat([low, close.shift()], axis=1).min(axis=1))
+    tr = (
+        pd.concat([high, close.shift()], axis=1).max(axis=1)
+        - pd.concat([low, close.shift()], axis=1).min(axis=1)
+    )
     out["true_range"] = tr
     out["atr_14"] = tr.rolling(14, min_periods=14).mean()
     for k in (1, 2, 3, 5):
         out[f"roc_{k}"] = close.pct_change(k)
     return out
 
-import numpy as np
-import pandas as pd
 
-def build_features(df, feature_set="basic", window=5, horizon=1, fee=0.001):
+def make_lagged_features(series: pd.Series, window: int) -> tuple[pd.DataFrame, pd.Series]:
+    """Create a simple lagged feature representation.
+
+    Parameters
+    ----------
+    series:
+        Univariate time series indexed by a ``DatetimeIndex`` or any sortable
+        index.  The index is preserved in the returned frames.
+    window:
+        Number of past observations to include as features.
+
+    Returns
+    -------
+    X, y:
+        ``X`` contains ``window`` lagged values labelled ``lag_1`` … ``lag_n``.
+        ``y`` is the contemporaneous value of ``series``.
     """
-    Construye features y el target para entrenamiento.
-    - horizon: días hacia adelante para predecir
-    - fee: comisión total ida y vuelta, usada para filtrar señales débiles
+
+    if not isinstance(series, pd.Series):  # pragma: no cover - defensive
+        raise TypeError("series must be a pandas Series")
+
+    X = pd.concat(
+        {f"lag_{i}": series.shift(i) for i in range(1, window + 1)}, axis=1
+    ).dropna()
+    y = series.loc[X.index]
+    return X, y
+
+
+def temporal_train_test_split(
+    X: pd.DataFrame,
+    y: pd.Series,
+    dates: pd.Series | None = None,
+    *,
+    test_size: float = 0.2,
+):
+    """Split data chronologically without shuffling.
+
+    The final ``test_size`` proportion (or absolute number) of samples forms the
+    test set with the remainder used for training.  ``dates`` is split in the
+    same manner if provided.
     """
 
-    # Ordenar por fecha si existe
-    if "date" in df.columns:
-        df = df.sort_values("date").reset_index(drop=True)
+    n_samples = len(X)
+    if 0 < test_size < 1:
+        n_test = int(np.ceil(n_samples * test_size))
+    else:
+        n_test = int(test_size)
+    split = n_samples - n_test
 
-    # Calcular target (subida o bajada)
-    df["target"] = (df["close"].shift(-horizon) / df["close"] - 1)
+    X_train, X_test = X.iloc[:split], X.iloc[split:]
+    y_train, y_test = y.iloc[:split], y.iloc[split:]
 
-    # Filtrar movimientos insignificantes (menores que doble comisión)
-    min_move = fee * 2
-    df.loc[df["target"].abs() < min_move, "target"] = np.nan
+    if dates is None:
+        return X_train, X_test, y_train, y_test
 
-    # Convertir a binario: 1 si sube, 0 si baja
-    df["target"] = (df["target"] > 0).astype(float)
-    df.dropna(subset=["target"], inplace=True)
+    dates_train, dates_test = dates.iloc[:split], dates.iloc[split:]
+    return X_train, X_test, y_train, y_test, dates_train, dates_test
 
-    # Features: precios con lags
-    feats = []
-    for lag in range(1, window + 1):
-        df[f"lag_close_{lag}"] = df["close"].shift(lag)
-        feats.append(f"lag_close_{lag}")
+def build_features(
+    df: pd.DataFrame,
+    *,
+    feature_set: str = "lags",
+    window: int = 3,
+):
+    """Return feature matrix, target vector and column names.
 
-    # Features: retornos porcentuales
-    for lag in range(1, window + 1):
-        df[f"ret_{lag}"] = df["close"].pct_change(lag)
-        feats.append(f"ret_{lag}")
+    Parameters
+    ----------
+    df:
+        DataFrame containing at least ``close`` and ``target`` columns.
+    feature_set:
+        ``"lags"`` to generate lagged ``close`` prices or ``"tech"`` for a small
+        set of technical indicators.
+    window:
+        Number of lags to generate when ``feature_set="lags"``.
+    """
 
-    df.dropna(inplace=True)
+    if feature_set == "lags":
+        cols = [f"lag_{i}" for i in range(1, window + 1)]
+        X = pd.concat({c: df["close"].shift(i) for i, c in enumerate(cols, 1)}, axis=1)
+    elif feature_set == "tech":
+        X = pd.DataFrame(index=df.index)
+        X["return"] = df["close"].pct_change()
+        X["sma_5"] = df["close"].rolling(5).mean()
+        X["sma_10"] = df["close"].rolling(10).mean()
+        X["rsi_14"] = _rsi(df["close"], 14)
+        cols = ["return", "sma_5", "sma_10", "rsi_14"]
+    else:  # pragma: no cover - defensive fallback
+        raise ValueError(f"Unknown feature_set: {feature_set}")
 
-    X = df[feats].values
-    y = df["target"].values
-    meta = {"features": feats, "window": window, "horizon": horizon}
-
-    return X, y, meta
+    X = X.dropna()
+    y = df.loc[X.index, "target"]
+    return X, y, cols

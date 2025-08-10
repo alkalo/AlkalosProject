@@ -74,8 +74,9 @@ def backtest_spot(
                 entry_price = None
 
         if signal == "BUY" and cash >= price * (1 + fee) and position == 0.0:
-            qty = cash * position_pct / (price * (1 + fee))
-            cash -= qty * price * (1 + fee)
+            buy_price = price * (1 + slippage)
+            qty = cash * position_pct / (buy_price * (1 + fee))
+            cash -= qty * buy_price * (1 + fee)
             position += qty
             entry_price = buy_price
             trades.append(Trade(ts, "BUY", buy_price, qty))
@@ -83,12 +84,11 @@ def backtest_spot(
             sell_price = price * (1 - slippage)
             cash += position * sell_price * (1 - fee)
             if entry_price is None:
-
-                entry_price = price
+                entry_price = sell_price
             trade_returns.append(
-                price * (1 - fee) / (entry_price * (1 + fee)) - 1
+                sell_price * (1 - fee) / (entry_price * (1 + fee)) - 1
             )
-            trades.append(Trade(ts, "SELL", price, position))
+            trades.append(Trade(ts, "SELL", sell_price, position))
             position = 0.0
             entry_price = None
 

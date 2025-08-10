@@ -7,6 +7,7 @@ import pandas as pd
 
 from .strategy import SignalStrategy
 from src.backtest.engine import backtest_spot
+from src.utils.env import get_logs_dir, get_models_dir, get_reports_dir
 
 
 logger = logging.getLogger(__name__)
@@ -32,9 +33,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    _ensure_dirs("logs/run_backtest.log")
+    _ensure_dirs(str(get_logs_dir() / "run_backtest.log"))
     logging.basicConfig(
-        filename="logs/run_backtest.log",
+        filename=str(get_logs_dir() / "run_backtest.log"),
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
@@ -52,7 +53,7 @@ def main() -> None:
     try:
         strategy = SignalStrategy(
             args.symbol,
-            model_dir="models",
+            model_dir=str(get_models_dir()),
             buy_thr=args.buy_thr,
             sell_thr=args.sell_thr,
             min_edge=args.min_edge,
@@ -83,7 +84,7 @@ def main() -> None:
         logger.exception("Backtest failed: %s", exc)
         return
 
-    reports_dir = Path("reports")
+    reports_dir = get_reports_dir()
     reports_dir.mkdir(exist_ok=True)
 
     summary_path = reports_dir / f"{args.symbol}_summary.json"

@@ -16,7 +16,8 @@ from typing import Callable, Dict, List
 
 import pandas as pd
 
-from utils.market_data import fetch_coingecko_ohlc, fetch_yf_ohlc
+from src.utils.env import get_data_dir, get_logs_dir
+from src.utils.market_data import fetch_coingecko_ohlc, fetch_yf_ohlc
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outfile",
-        default="data/{symbol}_{fiat}_1d.csv",
+        default=str(get_data_dir() / "{symbol}_{fiat}_1d.csv"),
         help="Output file pattern",
     )
     return parser.parse_args()
@@ -78,9 +79,9 @@ def _fetch_with_retry(func: Callable[..., pd.DataFrame], *args, **kwargs) -> pd.
 def main() -> None:
     args = _parse_args()
 
-    _ensure_dirs("logs/data_fetch.log")
+    _ensure_dirs(str(get_logs_dir() / "data_fetch.log"))
     logging.basicConfig(
-        filename="logs/data_fetch.log",
+        filename=str(get_logs_dir() / "data_fetch.log"),
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )

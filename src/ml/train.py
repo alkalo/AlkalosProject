@@ -18,6 +18,8 @@ import importlib
 import joblib
 import logging
 
+from src.utils.env import get_logs_dir, get_models_dir
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +28,9 @@ def _ensure_dirs(path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
-_ensure_dirs("logs/train.log")
+_ensure_dirs(str(get_logs_dir() / "train.log"))
 logging.basicConfig(
-    filename="logs/train.log",
+    filename=str(get_logs_dir() / "train.log"),
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
@@ -50,7 +52,7 @@ def train(
     feature_names: Sequence[str],
     model: Any | None = None,
     *,
-    model_dir: str = "models",
+    model_dir: str = str(get_models_dir()),
     scaler: Any | None = None,
     is_lstm: bool = False,
     report: dict | None = None,
@@ -134,7 +136,7 @@ def train_evaluate(
     model_type: str,
     horizon: int,
     window: int,
-    outdir: str = "models",
+    outdir: str = str(get_models_dir()),
 ) -> None:
     """Train a trivial model and persist artefacts.
 

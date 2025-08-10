@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 
+from src.utils.env import get_data_dir, get_models_dir
 from .train import train_evaluate
 
 
@@ -25,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--csv",
-        default="data/BTC_USD_1d.csv",
+        default=str(get_data_dir() / "BTC_USD_1d.csv"),
         help="Path to CSV file containing the dataset",
     )
     parser.add_argument(
@@ -47,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--outdir",
-        default="models",
+        default=str(get_models_dir()),
         help="Directory where artefacts will be stored",
     )
     return parser

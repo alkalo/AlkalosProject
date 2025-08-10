@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 import json
@@ -13,30 +14,15 @@ import pandas as pd
 class SignalStrategy:
     """Utility strategy used during backtesting.
 
-    The strategy expects model artefacts stored using the layout produced by
-    :func:`src.ml.train.train`::
-
-        models/{SYMBOL}/
-            model.pkl
-            model.h5       # optional, presence indicates LSTM
-            scaler.pkl
-            features.json
-            report.json
-            diagnostic.png
-
-    Parameters
-    ----------
-    symbol:
-        Trading pair or symbol identifier.
-    model_dir:
-        Root directory containing the ``models`` folder.
-    buy_thr, sell_thr, min_edge:
-        Thresholds controlling the generated signal.
+    The class normally expects a ``symbol`` string and loads the
+    corresponding model artefacts from ``model_dir``.  For testing purposes
+    a model instance can be supplied directly as the first argument.
     """
 
     def __init__(
         self,
-        symbol: str | Any,
+
+        symbol_or_model,
         model_dir: str = "models",
         *,
         buy_thr: float = 0.6,
@@ -47,7 +33,9 @@ class SignalStrategy:
         self.sell_thr = sell_thr
         self.min_edge = min_edge
 
-        if isinstance(symbol, str):
+
+        if isinstance(symbol_or_model, str):
+            symbol = symbol_or_model
             self.symbol = symbol
             base = Path(model_dir) / symbol
             self.model = joblib.load(base / "model.pkl")
@@ -59,9 +47,11 @@ class SignalStrategy:
             # treatment of input shapes.
             self.is_lstm = (base / "model.h5").exists()
         else:
-            # For testing purposes allow passing a model instance directly.
-            self.symbol = "CUSTOM"
-            self.model = symbol
+
+            # Direct model instance supplied (used in unit tests)
+            self.symbol = ""
+            self.model = symbol_or_model
+
             self.scaler = None
             self.feature_names = []
             self.is_lstm = False
@@ -75,6 +65,11 @@ class SignalStrategy:
         elif proba.ndim == 2 and proba.shape[1] == 1:
             proba = np.column_stack([1 - proba[:, 0], proba[:, 0]])
         return proba[-1, 1]
+
+    # Public wrapper used in tests
+    def predict_proba_last(self, X: np.ndarray) -> float:  # pragma: no cover - thin wrapper
+        return self._predict_proba_last(X)
+
 
 
     def generate_signal(self, df_window: pd.DataFrame) -> Literal["BUY", "SELL", "HOLD"]:

@@ -1,14 +1,4 @@
-import sys
-from pathlib import Path
-
 import numpy as np
-
-# Ensure the repository root is on the import path so ``models`` and
-# ``signal_strategy`` can be imported when the tests are executed from a
-# different working directory.
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from models import KerasLSTMClassifier
 from signal_strategy import SignalStrategy

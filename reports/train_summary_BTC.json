@@ -1,12 +1,12 @@
 {
   "symbol": "BTC",
-  "model": "logreg",
-  "window": 5,
+  "model": "lgbm",
+  "window": 40,
   "horizon": 1,
-  "n_samples": 1819,
-  "n_train": 1456,
-  "n_test": 363,
-  "acc_test": 0.4876,
-  "auc_test": 0.5384,
-  "model_path": "models\\BTC_logreg.pkl"
+  "n_samples": 324,
+  "n_train": 260,
+  "n_test": 64,
+  "acc_test": 0.5625,
+  "auc_test": 0.5539,
+  "model_path": "models\\BTC_lgbm.pkl"
 }

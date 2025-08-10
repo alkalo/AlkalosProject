@@ -1,249 +1,328 @@
-﻿param(
-  [string]$Symbols   = "BTC,ETH",
-  [string]$Exchange  = "binance",
-  [string]$Fiat      = "USDT",
-  [int]$Days         = 1825,
-  [string]$Timeframe = "1d",
-  [string]$Model     = "logreg",   # tu train_cli solo acepta 'logreg'
-  [switch]$Optimize  = $false,
-  [ValidateSet("calmar","sharpe","cagr")]
-  [string]$Objective = "calmar"
+﻿<# =====================================================================
+  master.ps1 – AlkalosProject (Windows / PowerShell + Python)
+
+  Flujo:
+    1) Prepara/activa .venv con install_env.ps1
+    2) Fetch por símbolo con validación CSV
+       - YF → CCXT(fiat) → CCXT(USDT) y normaliza a *_USD_1d.csv
+       - -ForceFetch borra y re-descarga
+       - -ForceCCXT fuerza CCXT (evita YF)
+    3) Entrena modelo (LightGBM por defecto)
+    4) Backtest DEFAULT
+    5) Optimize → lee best_params.json → Backtest OPTIMIZED (saltable)
+    6) Comparativa DEFAULT vs OPTIMIZED vs PORTFOLIO (tabla consola + CSV)
+
+  Uso típico:
+    .\master.ps1 -Symbols "BTC,ETH" -Fiat "USD" -Days 1825 -Model "lgbm" -Fee 0.001 -Slippage 0.0005
+
+  Opciones:
+    -ForceFetch   → re-descarga datos aunque existan
+    -ForceCCXT    → usa CCXT directamente (recomendado si YF falla)
+    -SkipOptimize → salta optimización y backtest optimized
+===================================================================== #>
+
+[CmdletBinding()]
+param(
+  [string]$Symbols = "BTC,ETH",
+  [string]$Fiat = "USD",
+  [int]$Days = 1825,
+  [string]$Source = "yf",            # yf | ccxt  (se ignora si -ForceCCXT)
+  [string]$Exchange = "binance",     # para ccxt
+  [string]$Model = "lgbm",
+  [int]$Horizon = 1,
+  [int]$Window = 40,
+  [double]$Fee = 0.001,
+  [double]$Slippage = 0.0005,
+  [double]$BuyThr = 0.6,
+  [double]$SellThr = 0.4,
+  [double]$MinEdge = 0.02,
+  [switch]$ForceFetch,
+  [switch]$ForceCCXT,
+  [switch]$SkipOptimize
 )
 
-function Info($msg){ Write-Host "[INFO] $msg" -ForegroundColor Cyan }
-function Warn($msg){ Write-Host "[WARN] $msg" -ForegroundColor Yellow }
-function Err($msg){ Write-Host "[ERROR] $msg" -ForegroundColor Red }
+$ErrorActionPreference = "Stop"
 
-$ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ROOT
+# ---------- Logging ----------
+function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
+function Ok($m){   Write-Host "[OK]  $m" -ForegroundColor Green }
+function Warn($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
+function Err($m){  Write-Host "[ERR] $m" -ForegroundColor Red }
 
-# Python del venv
-$VENV_PY = Join-Path $ROOT ".\.venv\Scripts\python.exe"
-$PY = "python"
-if (Test-Path $VENV_PY) { $PY = $VENV_PY }
+# ---------- Helpers ----------
+function CsvPath([string]$sym,[string]$fiat){ return "data\$($sym)_$($fiat)_1d.csv" }
+function ReportBase([string]$sym){ return "reports\$($sym)" }
+function S([double]$n){ return $n.ToString([System.Globalization.CultureInfo]::InvariantCulture) }  # decimales con punto
 
-Write-Host ""
-Write-Host "==========================================" -ForegroundColor Green
-Write-Host "   AlkalosProject – Master Runner" -ForegroundColor Green
-Write-Host "==========================================" -ForegroundColor Green
-Write-Host ""
-
-# 1) Entorno (usa tu install_env.ps1)
-if (Test-Path ".\install_env.ps1") {
-  Info "Instalando/actualizando entorno (install_env.ps1)..."
-  powershell -NoProfile -ExecutionPolicy Bypass -File .\install_env.ps1
-  if ($LASTEXITCODE -ne 0) { Err "install_env.ps1 falló"; exit 1 }
-} else {
-  Warn "install_env.ps1 no encontrado. Creo venv e instalo dependencias mínimas..."
-  if (-not (Test-Path $VENV_PY)) {
-    & python -m venv .venv
-    if ($LASTEXITCODE -ne 0) { Err "Creando venv falló"; exit 1 }
+# Ejecuta Python, captura salida, y muestra traceback si falla
+function Run-Py([string[]]$argv, [string]$step){
+  $output = & python @argv 2>&1
+  $exit = $LASTEXITCODE
+  if ($exit -ne 0) {
+    Err "$step falló (exit=$exit)"
+    if ($output) { $output | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray } }
+    throw "$step_failed"
   }
-  $PY = $VENV_PY
-  & $PY -m pip install --upgrade pip
-  if (Test-Path ".\requirements.txt") {
-    & $PY -m pip install -r .\requirements.txt
-  } else {
-    & $PY -m pip install pandas numpy matplotlib ccxt yfinance
+}
+
+# Validación básica del CSV OHLCV
+function Test-ValidCsv([string]$path){
+  if (-not (Test-Path $path)) { return $false }
+  try {
+    $lines = Get-Content -Path $path -TotalCount 50
+    if ($lines.Count -lt 12) {
+      $total = (Get-Content -Path $path | Measure-Object -Line).Lines
+      if ($total -lt 12) { return $false }
+    }
+    $hdr = $lines[0].ToLower()
+    foreach($k in @("timestamp","open","high","low","close")){
+      if ($hdr -notmatch $k){ return $false }
+    }
+    return $true
+  } catch { return $false }
+}
+
+# Descarga robusta: YF → CCXT(fiat) → CCXT(USDT) + normalización a *_USD_1d.csv si aplica
+function Fetch-Symbol([string]$sym, [string]$fiat, [int]$days, [string]$exchange, [bool]$forceCCXT){
+  $csv = CsvPath $sym $fiat
+
+  if ($ForceFetch -and (Test-Path $csv)) {
+    Warn "Forzando re-descarga: eliminando $csv…"
+    Remove-Item $csv -Force
   }
-  if ($LASTEXITCODE -ne 0) { Err "Instalación de dependencias falló"; exit 1 }
-}
-if (Test-Path $VENV_PY) { $PY = $VENV_PY }
 
-# 2) Detectar si src.data_fetch soporta --timeframe
-$timeframeSupported = $false
-try {
-  $helpText = & $PY -m src.data_fetch --help 2>&1
-  if ($helpText -match "--timeframe") { $timeframeSupported = $true }
-} catch { $timeframeSupported = $false }
+  if (Test-Path $csv -and (Test-ValidCsv $csv)) {
+    Info "Datos ya existen y son válidos: $csv"
+    return
+  } elseif (Test-Path $csv) {
+    Warn "CSV inválido detectado → eliminando $csv y reintentando…"
+    Remove-Item $csv -Force
+  }
 
-# 3) Fetch (CCXT)
-$symbols_list = $Symbols.Split(",") | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -ne "" }
-Info "Descargando datos con CCXT ($Exchange / $Fiat / $Days días$([string]::Format(' / {0}', $Timeframe)))..."
-foreach ($sym in $symbols_list) {
-  $args = @("-m","src.data_fetch","--source","ccxt","--exchange",$Exchange,"--symbols",$sym,"--fiat",$Fiat,"--days",$Days)
-  if ($timeframeSupported) { $args += @("--timeframe",$Timeframe) }
-  Write-Host ("  • {0}" -f $sym) -ForegroundColor DarkCyan
-  & $PY @args
-  if ($LASTEXITCODE -ne 0) { Warn ("Fetch falló para {0}" -f $sym) }
-}
+  function _Try-CCXT([string]$targetFiat){
+    Info "Descargando con CCXT ($exchange): $sym/$targetFiat ($days días)…"
+    Run-Py @("-m","src.data_fetch","--source","ccxt","--exchange",$exchange,"--symbols",$sym,"--fiat",$targetFiat,"--days",$days.ToString()) "data_fetch(CCXT,$sym,$targetFiat)"
+    $csvTry = CsvPath $sym $targetFiat
+    if (-not (Test-ValidCsv $csvTry)) { throw "ccxt_invalid_csv_${sym}_$targetFiat" }
+    return $csvTry
+  }
 
-# 4) Entrenamiento
-foreach ($sym in $symbols_list) {
-  # Detecta CSV: con timeframe o sin él
-  $csv1 = "data\${sym}_${Fiat}_${Timeframe}.csv"
-  $csv2 = "data\${sym}_${Fiat}.csv"
-  $csv = $null
-  if (Test-Path $csv1) { $csv = $csv1 } elseif (Test-Path $csv2) { $csv = $csv2 }
+  # Ruta CCXT directa si se fuerza
+  if ($forceCCXT -or $Source -eq "ccxt") {
+    try {
+      $null = _Try-CCXT $fiat
+    } catch {
+      if ($fiat -eq "USD") {
+        Warn "CCXT $sym/$fiat falló. Probando $sym/USDT y normalizando a *_USD_1d.csv…"
+        $csvUsdt = _Try-CCXT "USDT"
+        Copy-Item $csvUsdt $csv -Force
+      } else {
+        Err "Fallo CCXT para $sym/$fiat."
+        throw "fetch_failed_${sym}_${fiat}"
+      }
+    }
+    if (-not (Test-ValidCsv $csv)) {
+      if ($fiat -eq "USD") {
+        $csvUsdt = CsvPath $sym "USDT"
+        if (Test-ValidCsv $csvUsdt) { Copy-Item $csvUsdt $csv -Force }
+      }
+    }
+    if (-not (Test-ValidCsv $csv)) { throw "fetch_failed_${sym}_${fiat}" }
+    Ok "Descarga CCXT OK para $sym ($fiat)"
+    return
+  }
 
-  if (-not $csv) { Warn ( "CSV no encontrado para {0} (probé {1} y {2})" -f $sym, $csv1, $csv2 ); continue }
-
-  Info ("Entrenando {0} con {1} ..." -f $sym, $Model)
-  & $PY -m src.ml.train_cli --model $Model --csv $csv --symbol $sym --horizon 1 --window 5
-  if ($LASTEXITCODE -ne 0) { Warn ("Entrenamiento falló para {0}" -f $sym) }
-}
-
-# 5) Backtest (enhanced)
-foreach ($sym in $symbols_list) {
-  $csv1 = "data\${sym}_${Fiat}_${Timeframe}.csv"
-  $csv2 = "data\${sym}_${Fiat}.csv"
-  $csv = $null
-  if (Test-Path $csv1) { $csv = $csv1 } elseif (Test-Path $csv2) { $csv = $csv2 }
-  if (-not $csv) { continue }
-  Info ("Backtest (enhanced) de {0} ..." -f $sym)
-  & $PY -m src.backtest.run_backtest_enhanced --symbol $sym --csv $csv `
-        --sma-fast 20 --sma-slow 200 --adx-n 14 --adx-thr 20 `
-        --atr-n 14 --risk-per-trade 0.01 --sl-atr 2.0 --ts-atr 1.0 `
-        --fee 0.001 --slippage 0.0005 --initial-equity 10000
-  if ($LASTEXITCODE -ne 0) { Warn ("Backtest (enhanced) falló para {0}" -f $sym) }
-}
-
-
-# 6) Optimización enhanced (si existe el optimizador y hay CSV)
-$first = $symbols_list[0]
-$firstCsv1 = "data\${first}_${Fiat}_${Timeframe}.csv"
-$firstCsv2 = "data\${first}_${Fiat}.csv"
-$firstCsv  = $null
-if (Test-Path $firstCsv1) { $firstCsv = $firstCsv1 } elseif (Test-Path $firstCsv2) { $firstCsv = $firstCsv2 }
-
-if ( (Test-Path ".\src\optimize\optimize_enhanced.py") -and ($firstCsv) ) {
-  Info ("Optimizando estrategia enhanced sobre {0}..." -f $first)
-  & $PY -m src.optimize.optimize_enhanced --symbol $first --csv $firstCsv `
-      --sma-fast "10,20,30" --sma-slow "150,200,300" --adx-thr "20,25,30" `
-      --risk "0.005,0.01,0.015" --sl-atr "1.5,2.0,2.5" --ts-atr "0.5,1.0,1.5" `
-      --fee "0.0005,0.001" --slippage "0.0002,0.0005" --objective calmar
-  if ($LASTEXITCODE -ne 0) { Warn "Optimización enhanced falló (sigo)"; }
-} else {
-  Warn "optimize_enhanced no disponible o CSV ausente; salto optimización."
-}
-
-
-
-# 6.5) Cartera BTC+ETH por paridad de riesgo (si hay ≥2)
-if ($symbols_list.Count -ge 2) {
-  Info "Combinando cartera por paridad de riesgo (equity_enhanced)..."
-  & $PY -m src.backtest.portfolio_combine --symbols ($Symbols) --reports "reports" --enhanced --lookback 90
+  # YF primero; si falla, CCXT (y si USD falla, USDT -> normaliza)
+  Info "Descargando con Yahoo Finance: $sym-$fiat ($days días)…"
+  try {
+    Run-Py @("-m","src.data_fetch","--source","yf","--symbols",$sym,"--fiat",$fiat,"--days",$days.ToString()) "data_fetch(YF,$sym)"
+    if (-not (Test-ValidCsv $csv)) { throw "yf_invalid_csv" }
+    Ok "Descarga YF OK para $sym"
+    return
+  } catch {
+    Warn "YF falló o CSV inválido para $sym. Intentando CCXT ($exchange)…"
+    try {
+      $null = _Try-CCXT $fiat
+    } catch {
+      if ($fiat -eq "USD") {
+        Warn "CCXT $sym/$fiat falló. Probando $sym/USDT y normalizando a *_USD_1d.csv…"
+        $csvUsdt = _Try-CCXT "USDT"
+        Copy-Item $csvUsdt $csv -Force
+      } else {
+        Err "Fallo CCXT para $sym/$fiat."
+        throw "fetch_failed_${sym}_${fiat}"
+      }
+    }
+    if (-not (Test-ValidCsv $csv)) {
+      if ($fiat -eq "USD") {
+        $csvUsdt = CsvPath $sym "USDT"
+        if (Test-ValidCsv $csvUsdt) { Copy-Item $csvUsdt $csv -Force }
+      }
+    }
+    if (-not (Test-ValidCsv $csv)) { throw "fetch_failed_${sym}_${fiat}" }
+    Ok "Descarga CCXT OK para $sym ($fiat)"
+    return
+  }
 }
 
+# ---------- 1) Entorno ----------
+Info "Preparando entorno…"
+& "$PSScriptRoot\install_env.ps1"
+if ($LASTEXITCODE -ne 0) { Err "install_env.ps1 falló"; exit 1 }
+. "$PSScriptRoot\.venv\Scripts\Activate.ps1"
 
-# 7) Resumen → reports/MASTER_SUMMARY_*.md
-$reports = Join-Path $ROOT "reports"
-if (!(Test-Path $reports)) { New-Item -ItemType Directory -Path $reports | Out-Null }
-$ts = Get-Date -Format "yyyyMMdd-HHmmss"
-$summaryPath = Join-Path $reports ("MASTER_SUMMARY_" + $ts + ".md")
+# ---------- 2) Fetch ----------
+$symbolsArr = $Symbols.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+foreach ($sym in $symbolsArr) {
+  try {
+    Fetch-Symbol -sym $sym -fiat $Fiat -days $Days -exchange $Exchange -forceCCXT:$ForceCCXT.IsPresent
+  } catch {
+    Err "Fetch falló para $sym. Continuo con el resto…"
+  }
+}
 
-# Ruta del script Python temporal
-$tempPy = Join-Path ([System.IO.Path]::GetTempPath()) ("alkalos_summary_" + ([System.Guid]::NewGuid().ToString("N")) + ".py")
+# ---------- 3) Train ----------
+foreach ($sym in $symbolsArr) {
+  $csv = CsvPath $sym $Fiat
+  if (-not (Test-ValidCsv $csv)) { Warn "Saltando train: CSV inválido $csv"; continue }
+  Info "Entrenando $Model para $sym…"
+  try {
+    Run-Py @(
+      "-m","src.ml.train_cli",
+      "--model",$Model,"--csv",$csv,"--symbol",$sym,
+      "--horizon",$Horizon.ToString(),"--window",$Window.ToString()
+    ) "train($sym)"
+    Ok "Train OK $sym"
+  } catch {
+    Err "Train falló para $sym. Continuo…"
+  }
+}
 
-# Código Python que calcula métricas (incluye PORTFOLIO si existe)
-$pyCode = @'
-import os, glob, math
-import pandas as pd
-import numpy as np
+# ---------- 4) Backtest DEFAULT ----------
+foreach ($sym in $symbolsArr) {
+  $csv = CsvPath $sym $Fiat
+  if (-not (Test-ValidCsv $csv)) { continue }
+  Info "Backtest DEFAULT $sym…"
+  try {
+    Run-Py @(
+      "-m","src.backtest.run_backtest",
+      "--symbol",$sym,"--csv",$csv,
+      "--fee",(S $Fee),"--slippage",(S $Slippage),
+      "--buy-thr",(S $BuyThr),"--sell-thr",(S $SellThr),"--min-edge",(S $MinEdge)
+    ) "backtest_default($sym)"
+    Ok "Backtest DEFAULT OK $sym"
+  } catch {
+    Err "Backtest DEFAULT falló para $sym."
+  }
+}
 
-REPORTS = "reports"
+# ---------- 5) Optimize + Backtest OPTIMIZED ----------
+if (-not $SkipOptimize) {
+  foreach ($sym in $symbolsArr) {
+    $csv = CsvPath $sym $Fiat
+    if (-not (Test-ValidCsv $csv)) { continue }
 
-def latest(pattern):
-    files = glob.glob(pattern)
-    if not files: return ""
-    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-    return files[0]
-
-def drawdown(e):
-    peak = np.maximum.accumulate(e)
-    return e/peak - 1.0
-
-def metrics_from_eq(eq_path):
-    if not eq_path or not os.path.exists(eq_path): return {}
-    df = pd.read_csv(eq_path)
-    ts = "timestamp" if "timestamp" in df.columns else df.columns[0]
-    df[ts] = pd.to_datetime(df[ts], errors="coerce", utc=True)
-    df = df.dropna(subset=[ts,"equity"]).sort_values(ts)
-    e = df["equity"].astype(float).values
-    ret = e[-1]/e[0]-1 if e[0]!=0 else float("nan")
-    rets = pd.Series(e).pct_change().dropna()
-    sharpe = (rets.mean()/rets.std()*np.sqrt(252)) if rets.std()!=0 else float("nan")
-    dd = drawdown(e); maxdd = float(dd.min()) if len(dd) else float("nan")
-    yrs = max((df[ts].iloc[-1]-df[ts].iloc[0]).days/365.25, 1e-9)
-    cagr = (e[-1]/e[0])**(1/yrs)-1 if e[0]>0 else float("nan")
-    return {
-        "total_return(%)": None if math.isnan(ret) else round(100*ret,2),
-        "CAGR(%)": None if math.isnan(cagr) else round(100*cagr,2),
-        "Sharpe": None if math.isnan(sharpe) else round(float(sharpe),3),
-        "MaxDD(%)": None if math.isnan(maxdd) else round(100*maxdd,2)
+    Info "Optimizando parámetros para $sym…"
+    try {
+      Run-Py @(
+        "-m","src.optimize.optimize_enhanced",
+        "--csv",$csv,"--symbol",$sym,
+        "--fee",(S $Fee),"--slippage",(S $Slippage)
+      ) "optimize($sym)"
+    } catch {
+      Warn "Optimize falló para $sym. Sigo sin optimizado."
+      continue
     }
 
-def symbol_metrics(sym):
-    eq = latest(os.path.join(REPORTS, f"{sym}_equity_enhanced.csv")) or latest(os.path.join(REPORTS, f"{sym}_equity.csv"))
-    out = {"symbol": sym, **metrics_from_eq(eq)}
-    # trades
-    tr = latest(os.path.join(REPORTS, f"{sym}_trades_enhanced.csv")) or latest(os.path.join(REPORTS, f"{sym}_trades.csv"))
-    if tr and os.path.exists(tr):
-        t = pd.read_csv(tr)
-        cols = {c.lower(): c for c in t.columns}
-        pnl = cols.get("pnl") or cols.get("profit") or cols.get("pl")
-        if pnl is not None:
-            wins = t[pnl] > 0
-            gp = t.loc[wins, pnl].sum(); gl = -t.loc[~wins, pnl].sum()
-            pf = gp/gl if gl>0 else float("nan")
-            wr = wins.mean() if len(t)>0 else float("nan")
-            out.update({
-                "ProfitFactor": None if math.isnan(pf) else round(float(pf),3),
-                "WinRate(%)": None if math.isnan(wr) else round(100*float(wr),2),
-                "Trades": int(len(t))
-            })
-    # verdict
-    s = out.get("Sharpe") or 0.0
-    dd = out.get("MaxDD(%)"); dd = dd if dd is not None else -100.0
-    verdict = "🔴 NO listo (Sharpe<0.8 o DD<-20%)"
-    if s>=1.2 and dd>-20: verdict = "🟢 Listo para paper serio"
-    elif s>=0.8 and dd>-25: verdict = "🟠 Mejorable; validar con filtros/ATR"
-    out["Verdict"] = verdict
-    return out
+    $bestJson = Join-Path (ReportBase $sym) "${sym}_best_params.json"
+    if (-not (Test-Path $bestJson)) {
+      Warn "No se encontró $bestJson para $sym. Sigo con DEFAULT."
+      continue
+    }
 
-symbols = os.environ.get("ALKALOS_SYMBOLS","BTC,ETH").split(",")
-rows = [symbol_metrics(s.strip().upper()) for s in symbols if s.strip()]
+    try {
+      $best = Get-Content $bestJson | ConvertFrom-Json
+      if ($null -eq $best.buy_thr -or $null -eq $best.sell_thr -or $null -eq $best.min_edge) {
+        Warn "best_params incompleto para $sym."
+        continue
+      }
+      $optBuy  = [double]$best.buy_thr
+      $optSell = [double]$best.sell_thr
+      $optEdge = [double]$best.min_edge
 
-md = ["# Master Summary", ""]
-for r in rows:
-    md.append(f"## {r['symbol']}")
-    for k in ["total_return(%)","CAGR(%)","Sharpe","MaxDD(%)","ProfitFactor","WinRate(%)","Trades","Verdict"]:
-        if k in r: md.append(f"- **{k}**: {r[k]}")
-    md.append("")
+      Info "Backtest OPTIMIZED $sym (buy=$optBuy, sell=$optSell, edge=$optEdge)…"
+      Run-Py @(
+        "-m","src.backtest.run_backtest",
+        "--symbol",$sym,"--csv",$csv,
+        "--fee",(S $Fee),"--slippage",(S $Slippage),
+        "--buy-thr",(S $optBuy),"--sell-thr",(S $optSell),"--min-edge",(S $optEdge),
+        "--tag","optimized"
+      ) "backtest_optimized($sym)"
+      Ok "Backtest OPTIMIZED OK $sym"
+    } catch {
+      Err "Backtest OPTIMIZED falló para $sym."
+    }
+  }
+} else {
+  Warn "SkipOptimize activo → no se realizará optimización ni backtest optimized."
+}
 
-# portfolio (si existe)
-port = os.path.join(REPORTS, "portfolio_equity.csv")
-pm = metrics_from_eq(port)
-if pm:
-    md.append("## PORTFOLIO (BTC+ETH vol-target 90d)")
-    for k,v in pm.items():
-        md.append(f"- **{k}**: {v}")
-    s = pm.get("Sharpe") or 0.0
-    dd = pm.get("MaxDD(%)"); dd = dd if dd is not None else -100.0
-    verdict = "🔴 NO listo (Sharpe<0.8 o DD<-20%)"
-    if s>=1.2 and dd>-20: verdict = "🟢 Listo para paper serio"
-    elif s>=0.8 and dd>-25: verdict = "🟠 Mejorable; validar con filtros/ATR"
-    md.append(f"- **Verdict**: {verdict}")
-    md.append("")
+# ---------- 6) Comparativa y salida en consola ----------
+function Load-Metrics([string]$sym, [string]$tag="default"){
+  $summary = "reports\${sym}_summary.json"
+  if ($tag -eq "optimized") { $summary = "reports\${sym}_summary_optimized.json" }
+  if (-not (Test-Path $summary)) { return $null }
+  try { return Get-Content $summary | ConvertFrom-Json } catch { return $null }
+}
 
-out_path = os.environ.get("ALKALOS_SUMMARY_OUT","MASTER_SUMMARY.md")
-open(out_path,"w",encoding="utf-8").write("\n".join(md))
-print("\n".join(md))
-'@
+$rows = @()
+foreach ($sym in $symbolsArr) {
+  $d = Load-Metrics $sym "default"
+  $o = Load-Metrics $sym "optimized"
+  if ($d) {
+    $rows += [pscustomobject]@{
+      Symbol=$sym; Variant="default"
+      CAGR=$d.cagr; Sharpe=$d.sharpe; Sortino=$d.sortino
+      MaxDD=$d.max_drawdown; WinRate=$d.win_rate; Trades=$d.trades
+      FinalEquity=$d.final_equity
+    }
+  }
+  if ($o) {
+    $rows += [pscustomobject]@{
+      Symbol=$sym; Variant="optimized"
+      CAGR=$o.cagr; Sharpe=$o.sharpe; Sortino=$o.sortino
+      MaxDD=$o.max_drawdown; WinRate=$o.win_rate; Trades=$o.trades
+      FinalEquity=$o.final_equity
+    }
+  }
+}
 
-Set-Content -Path $tempPy -Value $pyCode -Encoding UTF8
+$portfolioCsv = "reports\portfolio_equity.csv"
+if (Test-Path $portfolioCsv) {
+  try {
+    $port = Import-Csv $portfolioCsv
+    $last = $port | Select-Object -Last 1
+    $rows += [pscustomobject]@{
+      Symbol="PORTFOLIO"; Variant="portfolio"
+      CAGR=$null; Sharpe=$null; Sortino=$null
+      MaxDD=$null; WinRate=$null; Trades=$null
+      FinalEquity=$last.Equity
+    }
+  } catch {
+    Warn "No se pudo leer $portfolioCsv para comparativa."
+  }
+}
 
-$env:ALKALOS_SYMBOLS     = $Symbols
-$env:ALKALOS_SUMMARY_OUT = $summaryPath
+$compCsv = "reports\comparison_default_optimized_portfolio.csv"
+$rows | Export-Csv -NoTypeInformation -Path $compCsv -Encoding UTF8
 
-& $PY $tempPy
-Remove-Item $tempPy -ErrorAction SilentlyContinue
-
-Info ("Resumen guardado en: {0}" -f $summaryPath)
 Write-Host ""
-Write-Host "================  NOTAS  ================" -ForegroundColor Green
-Write-Host "• 🟢 Listo para paper serio  => Sharpe ≥ 1.2 y MaxDD > -20%" -ForegroundColor Green
-Write-Host "• 🟠 Mejorable                => Sharpe ≥ 0.8 y MaxDD > -25%" -ForegroundColor Yellow
-Write-Host "• 🔴 NO listo                 => umbrales peores" -ForegroundColor Red
-Write-Host "=========================================" -ForegroundColor Green
-Write-Host ""
+if (Test-Path $compCsv) {
+  Ok "Resumen final (DEFAULT vs OPTIMIZED vs PORTFOLIO):"
+  Import-Csv $compCsv | Sort-Object Symbol, Variant | Format-Table -AutoSize
+  Ok "Comparativa guardada en $compCsv"
+} else {
+  Warn "No se generó comparativa."
+}
+
+exit 0

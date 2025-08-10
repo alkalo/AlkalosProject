@@ -19,7 +19,8 @@ from typing import Tuple
 import pandas as pd
 
 from src.backtest.strategy import SignalStrategy
-from src.utils.env import get_logs_dir, get_reports_dir
+from src.utils.env import get_reports_dir
+from src.utils.logging_config import setup_logging
 from src.utils.notify import notify
 
 FEE_RATE = 0.006
@@ -127,16 +128,12 @@ def _fetch_balances(client, symbol: str) -> Tuple[float, float]:
 def main() -> None:  # pragma: no cover - CLI entry point
     args = _parse_args()
 
-    _ensure_dirs(str(get_logs_dir() / "paper_bot.log"))
-    logging.basicConfig(
-        filename=str(get_logs_dir() / "paper_bot.log"),
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_logging("paper_bot")
 
     logger.info("Starting %s bot for %s", args.mode, args.symbol)
     try:
-        strat = SignalStrategy(args.symbol)
+        costs = (FEE_RATE + SLIPPAGE) * 2
+        strat = SignalStrategy(args.symbol, costs=costs)
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.exception("Failed to load strategy: %s", exc)
         notify(f"Failed to load strategy: {exc}")

@@ -18,23 +18,15 @@ import importlib
 import joblib
 import logging
 
-from src.utils.env import get_logs_dir, get_models_dir
+from src.utils.env import get_models_dir
+from src.utils.logging_config import setup_logging
 from .feature_engineering import add_simple_returns, add_tech_indicators
 
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_dirs(path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-
-
-_ensure_dirs(str(get_logs_dir() / "train.log"))
-logging.basicConfig(
-    filename=str(get_logs_dir() / "train.log"),
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+setup_logging("train")
 
 
 class _IdentityScaler:
@@ -173,7 +165,7 @@ def train_evaluate(
     from src.ml.data_utils import temporal_train_test_split
     import matplotlib.pyplot as plt
 
-    from .models_wrappers import LGBMClassifierModel
+    from lightgbm import LGBMClassifier
 
     logger.info("Training %s model for %s", model_type, symbol)
     model_type_lower = model_type.lower()
@@ -224,7 +216,7 @@ def train_evaluate(
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
-        model = LGBMClassifierModel(n_estimators=100, random_state=42)
+        model = LGBMClassifier(n_estimators=100, random_state=42)
         model.fit(X_train_scaled, y_train)
         proba = model.predict_proba(X_test_scaled)[:, 1]
         preds = model.predict(X_test_scaled)

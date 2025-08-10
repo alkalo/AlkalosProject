@@ -56,7 +56,7 @@ class SignalStrategy:
             self.feature_names = []
             self.is_lstm = False
 
-    def predict_proba_last(self, X: np.ndarray) -> float:
+    def _predict_proba_last(self, X: np.ndarray) -> float:
         """Return probability of the positive class for the last sample."""
         proba = self.model.predict_proba(X)
         proba = np.asarray(proba)

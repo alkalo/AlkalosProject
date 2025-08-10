@@ -10,6 +10,7 @@ from __future__ import annotations
 import pandas as pd
 
 from .feature_engineering import add_simple_returns, add_tech_indicators
+from typing import Sequence, Tuple, Union
 from typing import Tuple, Sequence, Union
 
 

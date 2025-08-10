@@ -1,75 +1,48 @@
-"""Environment helpers for configuration and credentials.
+"""Helpers for accessing configuration and project directories.
 
-This module centralises access to project directories by reading optional
-settings from a ``.env`` file.  If the environment variables are missing,
-sensible defaults relative to the repository root are used.
+This module provides a thin wrapper around :mod:`configs.settings` so that
+other parts of the codebase can easily access common paths (and later
+credentials) without needing to know about the underlying settings
+implementation.
 """
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-
-# Resolve repository root (``src/utils`` -> repo root)
-BASE_DIR = Path(__file__).resolve().parents[2]
-
-# Load environment variables from ``.env`` if present
-load_dotenv(BASE_DIR / ".env")
-
-
-def _resolve_dir(var_name: str, default: str) -> Path:
-    """Return a directory path from an environment variable.
-
-    Parameters
-    ----------
-    var_name:
-        Name of the environment variable to look up.
-    default:
-        Fallback relative path when the variable is undefined.
-
-    Returns
-    -------
-    pathlib.Path
-        Absolute path to the requested directory.
-    """
-
-    value = os.getenv(var_name, default)
-    path = Path(value)
-    if not path.is_absolute():
-        path = BASE_DIR / path
-    return path
+from configs.settings import Settings, get_settings
 
 
 @lru_cache()
+def _settings() -> Settings:
+    """Return the cached application settings."""
+
+    return get_settings()
+
+
 def get_data_dir() -> Path:
-    """Return the directory where datasets are stored."""
+    """Directory where datasets are stored."""
 
-    return _resolve_dir("DATA_DIR", "data")
+    return _settings().data_dir
 
 
-@lru_cache()
 def get_models_dir() -> Path:
-    """Return the directory containing trained models."""
+    """Directory containing trained models."""
 
-    return _resolve_dir("MODELS_DIR", "models")
+    return _settings().models_dir
 
 
-@lru_cache()
 def get_logs_dir() -> Path:
-    """Return the directory for log files."""
+    """Directory used for log files."""
 
-    return _resolve_dir("LOGS_DIR", "logs")
+    return _settings().logs_dir
 
 
-@lru_cache()
 def get_reports_dir() -> Path:
-    """Return the directory for generated reports."""
+    """Directory for generated reports."""
 
-    return _resolve_dir("REPORTS_DIR", "reports")
+    return _settings().reports_dir
 
 
 __all__ = [
@@ -78,5 +51,4 @@ __all__ = [
     "get_logs_dir",
     "get_reports_dir",
 ]
-
 

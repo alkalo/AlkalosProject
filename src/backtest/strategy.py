@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 import json
@@ -67,6 +68,7 @@ class SignalStrategy:
         elif proba.ndim == 2 and proba.shape[1] == 1:
             proba = np.column_stack([1 - proba[:, 0], proba[:, 0]])
         return proba[-1, 1]
+
 
 
     def generate_signal(self, df_window: pd.DataFrame) -> Literal["BUY", "SELL", "HOLD"]:

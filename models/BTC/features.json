@@ -1,0 +1,19 @@
+{
+  "columns": [
+    "close_lag_1",
+    "ret_1",
+    "close_lag_2",
+    "ret_2",
+    "close_lag_3",
+    "ret_3",
+    "close_lag_4",
+    "ret_4",
+    "close_lag_5",
+    "ret_5",
+    "ret_1_abs"
+  ],
+  "feature_set": "lags",
+  "window": 5,
+  "horizon": 1,
+  "target_col": "target"
+}

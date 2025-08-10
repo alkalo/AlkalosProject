@@ -63,9 +63,13 @@ def main():
             kwargs["horizon"] = args.horizon
         X, y, meta = build_features(df.copy(), **kwargs)
 
-    # Escalado
+    # Escalado + guardas defensivas
+    if len(X) == 0:
+        raise ValueError("No hay filas válidas tras construir features. Revisa datos (close NaN) o usa un window menor.")
+
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
+
 
     # Modelo
     clf = LGBMClassifier(

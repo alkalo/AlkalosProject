@@ -1,6 +1,7 @@
+# src/backtest/run_backtest.py
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import inspect
 
@@ -15,6 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol", required=True)
@@ -26,6 +28,7 @@ def parse_args():
     p.add_argument("--min-edge", type=float, default=0.0)
     return p.parse_args()
 
+
 def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["timestamp", "date", "Datetime", "Date"]:
         if col in df.columns:
@@ -36,12 +39,14 @@ def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
         df.index = pd.to_datetime(df.index, errors="coerce", utc=True)
     return df.sort_index()
 
+
 def load_model_bundle(symbol: str):
     model_dir = Path("models") / symbol
     clf = joblib.load(model_dir / "model.pkl")
     scaler = joblib.load(model_dir / "scaler.pkl")
     fjson = load_features_json(model_dir / "features.json")
     return clf, scaler, fjson, model_dir
+
 
 def ensure_features(df_raw: pd.DataFrame, fjson: dict) -> pd.DataFrame:
     cols = fjson["columns"]
@@ -65,6 +70,7 @@ def ensure_features(df_raw: pd.DataFrame, fjson: dict) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Faltan columnas tras build_features: {missing}")
     return X.loc[:, cols].copy()
+
 
 def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Series, list, dict]:
     equity = []
@@ -129,9 +135,10 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
             "buy_thr": args.buy_thr, "sell_thr": args.sell_thr, "min_edge": args.min_edge,
             "fee": args.fee, "slippage": args.slippage,
         },
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),  # UTC aware, sin warning
     }
     return pd.Series(equity, index=prices.index, name="equity"), trades, summary
+
 
 def main():
     args = parse_args()
@@ -145,24 +152,43 @@ def main():
     X = ensure_features(df.copy(), fjson)
     X_scaled = pd.DataFrame(scaler.transform(X), index=X.index, columns=X.columns)
 
+    # Probabilidades del modelo
     probs = clf.predict_proba(X_scaled)[:, 1]
-    eq, trades, summary = simulate_backtest(df["close"].astype(float), probs, args)
 
-    reports_dir = Path("reports"); reports_dir.mkdir(parents=True, exist_ok=True)
-    base = reports_dir / f"{args.symbol}"
+    # Alinear precios con las filas de features (misma longitud/índice)
+    prices = df["close"].astype(float).reindex(X.index)
 
+    # Limpiar NaNs por si acaso
+    mask = prices.notna()
+    prices = prices[mask]
+    probs = probs[mask.values]  # Serie -> vector booleano
+
+    # Ejecutar backtest
+    eq, trades, summary = simulate_backtest(prices, probs, args)
+
+    # Guardar resultados (sin with_suffix)
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    base_name = args.symbol
+
+    # Equity
     plt.figure()
     eq.plot()
     plt.title(f"Equity Curve - {args.symbol}")
-    plt.xlabel("Time"); plt.ylabel("Equity")
+    plt.xlabel("Time")
+    plt.ylabel("Equity")
     plt.tight_layout()
-    plt.savefig(base.with_suffix("_equity.png"))
+    plt.savefig(reports_dir / f"{base_name}_equity.png")
 
-    pd.DataFrame(trades).to_csv(base.with_suffix("_trades.csv"), index=False)
-    with (base.with_suffix("_summary.json")).open("w", encoding="utf-8") as f:
+    # Trades CSV
+    pd.DataFrame(trades).to_csv(reports_dir / f"{base_name}_trades.csv", index=False)
+
+    # Summary JSON
+    with (reports_dir / f"{base_name}_summary.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
     print(f"[OK] backtest listo en /reports para {args.symbol}")
+
 
 if __name__ == "__main__":
     main()

@@ -7,6 +7,9 @@ but mirrors the expected directory layout so that unit tests can exercise the
 loading logic of the strategy component.
 """
 from __future__ import annotations
+from src.ml.data_utils import temporal_train_test_split
+
+
 
 import json
 import os
@@ -316,3 +319,64 @@ def train_evaluate(
 
 if __name__ == "__main__":  # pragma: no cover - manual execution helper
     train("EXAMPLE", ["feat1", "feat2"])  # type: ignore[arg-type]
+    
+    
+# --- HOTFIX v2: build_features devuelve DataFrame (X) y Series (y) con índice ---
+from typing import List
+import pandas as pd
+
+def build_features(
+    df: pd.DataFrame,
+    feature_type: str | None = None,
+    window: int = 30,
+    target_col: str = "target",
+    feature_set: str | None = None,
+):
+    if feature_type is None and feature_set is not None:
+        feature_type = feature_set
+    if feature_type is None:
+        feature_type = "lags"
+
+    if target_col not in df.columns:
+        raise ValueError(f"El CSV debe incluir columna objetivo '{target_col}'.")
+
+    df = df.copy()
+
+    # ORDENAR y asegurar numérico
+    if "timestamp" in df.columns:
+        df = df.sort_values("timestamp")
+    # Cierra por si close vino como string o con NaN
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+
+    base_non_feature = {"timestamp","date","open","high","low","close","volume",target_col}
+    feature_cols: List[str] = []
+
+    if feature_type == "lags":
+        if "close" not in df.columns:
+            raise ValueError("Falta columna 'close' para generar lags.")
+        for k in range(1, window + 1):
+            col = f"lag_{k}"
+            df[col] = df["close"].shift(k)
+            feature_cols.append(col)
+
+    elif feature_type == "tech":
+        from src.ml.feature_engineering import add_tech_indicators
+        df = add_tech_indicators(df)
+        feature_cols = [c for c in df.columns if c not in base_non_feature]
+    else:
+        raise ValueError(f"feature_type/feature_set no reconocido: {feature_type}")
+
+    # limpiar filas inválidas
+    df = df.dropna(subset=feature_cols + [target_col]).copy()
+
+    # SÚPER IMPORTANTE: si quedó vacío, avisa claro
+    if df.empty:
+        raise ValueError(
+            "Tras generar features y limpiar NaNs no quedan filas. "
+            "Revisa que 'close' sea numérico, que haya suficientes datos y que WINDOW no sea demasiado grande."
+        )
+
+    X = df[feature_cols].copy()
+    y = df[target_col].astype(int).copy()
+    return X, y, feature_cols
+# --- FIN HOTFIX v2 ---

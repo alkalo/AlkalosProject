@@ -1,0 +1,10 @@
+2025-08-10 16:31:00,083 INFO matplotlib.font_manager: generated new fontManager
+2025-08-10 16:31:00,448 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:32:11,653 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:32:35,772 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:34:43,003 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:36:06,394 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:38:40,094 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:41:26,671 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:45:19,611 INFO src.ml.train: Training lgbm model for BTC
+2025-08-10 16:52:17,190 INFO src.ml.train: Training lgbm model for BTC

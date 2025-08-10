@@ -1,2 +1,5 @@
 numpy
 joblib
+pandas
+requests
+yfinance

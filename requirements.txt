@@ -4,5 +4,7 @@ pandas
 requests
 yfinance
 python-dotenv
+pydantic
+pydantic-settings
 ccxt
 lightgbm

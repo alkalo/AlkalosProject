@@ -1,6 +1,4 @@
 # install_env.ps1
-# Instala dependencias del proyecto evitando compilaciones
-
 Write-Host "==> Actualizando pip, setuptools, wheel..." -ForegroundColor Cyan
 python -m pip install --upgrade pip setuptools wheel
 
@@ -15,4 +13,4 @@ pip install --only-binary=:all: --index-url https://pypi.org/simple `
 Write-Host "==> Instalando resto de requirements..." -ForegroundColor Cyan
 pip install -r requirements.txt --no-deps
 
-Write-Host "✅ Entorno listo. Puedes ejecutar .\sanity_e2e.ps1" -ForegroundColor Green
+Write-Host "✅ Entorno listo. Ejecuta .\sanity_e2e.ps1" -ForegroundColor Green

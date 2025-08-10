@@ -6,17 +6,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
 from datetime import datetime
 import json
-
-# modelos
 from lightgbm import LGBMClassifier
 
-# tu util de features (ya existente)
-from src.ml.data_utils import build_features  # debe devolver X, y, meta (o X, y, info)
+from src.ml.data_utils import build_features
 from src.utils.features_io import save_features_json
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", required=True, help="Ruta CSV con OHLCV o con features")
+    p.add_argument("--csv", required=True, help="Ruta CSV con OHLCV o features")
     p.add_argument("--symbol", required=True)
     p.add_argument("--model", choices=["lgbm"], default="lgbm")
     p.add_argument("--feature_set", choices=["lags", "tech"], default="lags")
@@ -26,13 +23,11 @@ def parse_args():
     return p.parse_args()
 
 def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
-    # intenta encontrar timestamp o indexarlo por fecha
     for col in ["timestamp", "date", "Datetime", "Date"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
             df = df.set_index(col).sort_index()
             return df
-    # si viene ya indexado por fecha
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index, errors="coerce", utc=True)
     return df.sort_index()
@@ -42,47 +37,40 @@ def main():
     df = pd.read_csv(args.csv)
     df = ensure_datetime_index(df)
 
-    # ¿el CSV ya trae features? heurística: si faltan columnas típicas de features, las construimos
-    candidate_feature_cols = [c for c in df.columns if any(s in c for s in ["lag", "rsi", "ema", "sma", "macd"])]
-    has_features = len(candidate_feature_cols) > 0
+    # Heurística mínima: si no veo columnas de features, las construyo
+    feature_like = [c for c in df.columns if any(s in c.lower() for s in ["lag", "rsi", "ema", "sma", "macd"])]
+    has_features = len(feature_like) > 0
 
     if has_features:
-        # Asumimos que trae X + y (target)
         if "target" not in df.columns:
             raise ValueError("CSV con features debe incluir 'target'")
         y = df["target"].astype(int)
         X = df.drop(columns=["target"])
         meta = {"feature_set": args.feature_set, "window": args.window, "horizon": args.horizon}
     else:
-        # Construye features a partir de OHLCV
         X, y, meta = build_features(df.copy(), feature_set=args.feature_set, window=args.window, horizon=args.horizon)
 
-    # Escalado
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Modelo (mínimo estable)
-    if args.model == "lgbm":
-        clf = LGBMClassifier(
-            n_estimators=400,
-            learning_rate=0.05,
-            max_depth=-1,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.0,
-            random_state=args.random_state,
-            n_jobs=-1,
-        )
+    clf = LGBMClassifier(
+        n_estimators=400,
+        learning_rate=0.05,
+        max_depth=-1,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_lambda=1.0,
+        random_state=args.random_state,
+        n_jobs=-1,
+    )
     clf.fit(X_scaled, y)
 
-    # Métricas (hold-in simple, para algo rápido)
     y_pred = clf.predict(X_scaled)
     y_prob = clf.predict_proba(X_scaled)[:, 1]
     report = classification_report(y, y_pred, output_dict=True, zero_division=0)
     auc = roc_auc_score(y, y_prob)
     cm = confusion_matrix(y, y_pred).tolist()
 
-    # Persistencia
     model_dir = Path("models") / args.symbol
     model_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(clf, model_dir / "model.pkl")
@@ -95,13 +83,10 @@ def main():
                 "created_at": datetime.utcnow().isoformat(),
                 "symbol": args.symbol,
                 "model": args.model,
-                "metrics": {"roc_auc": auc, **report},
+                "metrics": {"roc_auc": auc, **report, "confusion_matrix": cm},
                 "n_samples": int(len(X)),
                 "features_count": int(X.shape[1]),
-                "libs": {
-                    "lightgbm": "4.5.0",
-                    "sklearn": "1.5.1",
-                },
+                "libs": {"lightgbm": "4.5.0", "sklearn": "1.6.1"},
                 "meta": meta,
             },
             f,

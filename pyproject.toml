@@ -6,12 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "alkalos"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
 
 [tool.setuptools.package-dir]
-# usamos layout simple; 'src' es el paquete raíz
 "" = "."

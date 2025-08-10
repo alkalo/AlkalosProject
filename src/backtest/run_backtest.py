@@ -1,20 +1,16 @@
 import argparse
 import json
 import logging
-from pathlib import Path
 
 import pandas as pd
 
 from .strategy import SignalStrategy
 from src.backtest.engine import backtest_spot
-from src.utils.env import get_logs_dir, get_models_dir, get_reports_dir
+from src.utils.env import get_models_dir, get_reports_dir
+from src.utils.logging_config import setup_logging
 
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_dirs(path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,12 +54,7 @@ def main() -> None:
         args.min_edge = cfg.get("min_edge", args.min_edge)
         args.window_size = cfg.get("window", cfg.get("window_size", args.window_size))
 
-    _ensure_dirs(str(get_logs_dir() / "run_backtest.log"))
-    logging.basicConfig(
-        filename=str(get_logs_dir() / "run_backtest.log"),
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_logging("run_backtest")
 
     logger.info("Starting backtest for %s", args.symbol)
     try:

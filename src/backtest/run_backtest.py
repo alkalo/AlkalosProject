@@ -76,12 +76,14 @@ def main() -> None:
         return
 
     try:
+        costs = (args.fee + args.slippage) * 2
         strategy = SignalStrategy(
             args.symbol,
             model_dir=str(get_models_dir()),
             buy_thr=args.buy_thr,
             sell_thr=args.sell_thr,
             min_edge=args.min_edge,
+            costs=costs,
         )
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.exception("Failed to initialise strategy: %s", exc)

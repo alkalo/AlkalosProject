@@ -68,54 +68,46 @@ def _build_tech_features(df: pd.DataFrame, window: int) -> pd.DataFrame:
         out[f"roc_{k}"] = close.pct_change(k)
     return out
 
-def build_features(
-    df: pd.DataFrame,
-    feature_set: str = "lags",
-    window: int = 5,
-    horizon: int = 1,
-    target_col: str = "target",
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, Any]]:
+import numpy as np
+import pandas as pd
+
+def build_features(df, feature_set="basic", window=5, horizon=1, fee=0.001):
     """
-    Construye X (features) y y (target binario: 1 si close(t+h)>close(t)) desde OHLCV.
-    Devuelve: X, y, meta dict con feature_set/window/horizon.
+    Construye features y el target para entrenamiento.
+    - horizon: días hacia adelante para predecir
+    - fee: comisión total ida y vuelta, usada para filtrar señales débiles
     """
-    df = _ensure_datetime_index(df)
-    df = _normalize_ohlcv(df)
 
-    if "close" not in df.columns:
-        raise ValueError("Se requiere columna 'close' para construir features.")
+    # Ordenar por fecha si existe
+    if "date" in df.columns:
+        df = df.sort_values("date").reset_index(drop=True)
 
-    h = max(int(horizon), 1)
-    future = df["close"].shift(-h)
-    df[target_col] = (future > df["close"]).astype("Int64")
+    # Calcular target (subida o bajada)
+    df["target"] = (df["close"].shift(-horizon) / df["close"] - 1)
 
-    fs = (feature_set or "lags").lower()
-    if fs not in {"lags", "tech", "both"}:
-        fs = "lags"
+    # Filtrar movimientos insignificantes (menores que doble comisión)
+    min_move = fee * 2
+    df.loc[df["target"].abs() < min_move, "target"] = np.nan
 
-    w = max(int(window), 1)
+    # Convertir a binario: 1 si sube, 0 si baja
+    df["target"] = (df["target"] > 0).astype(float)
+    df.dropna(subset=["target"], inplace=True)
+
+    # Features: precios con lags
     feats = []
-    if fs in {"lags", "both"}:
-        feats.append(_build_lag_features(df, w))
-    if fs in {"tech", "both"}:
-        feats.append(_build_tech_features(df, w))
-    X = pd.concat(feats, axis=1)
+    for lag in range(1, window + 1):
+        df[f"lag_close_{lag}"] = df["close"].shift(lag)
+        feats.append(f"lag_close_{lag}")
 
-    valid_len = len(df) - h
-    if valid_len < 1:
-        return X.iloc[0:0], pd.Series(dtype=int), {"feature_set": fs, "window": w, "horizon": h, "target_col": target_col}
+    # Features: retornos porcentuales
+    for lag in range(1, window + 1):
+        df[f"ret_{lag}"] = df["close"].pct_change(lag)
+        feats.append(f"ret_{lag}")
 
-    X = X.iloc[:valid_len]
-    y = df[target_col].iloc[:valid_len].astype(int)
+    df.dropna(inplace=True)
 
-    mask_valid = ~X.isna().any(axis=1)
-    X = X.loc[mask_valid]
-    y = y.loc[X.index]
+    X = df[feats].values
+    y = df["target"].values
+    meta = {"features": feats, "window": window, "horizon": horizon}
 
-    meta: Dict[str, Any] = {
-        "feature_set": fs,
-        "window": int(w),
-        "horizon": int(h),
-        "target_col": target_col,
-    }
     return X, y, meta

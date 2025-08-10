@@ -47,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Window size for features",
     )
     parser.add_argument(
+        "--features",
+        choices=["returns", "indicators"],
+        default="returns",
+        help="Feature set to use",
+    )
+    parser.add_argument(
         "--outdir",
         default=str(get_models_dir()),
         help="Directory where artefacts will be stored",
@@ -63,6 +69,7 @@ def main(args: list[str] | None = None) -> None:
         model_type=parsed.model,
         horizon=parsed.horizon,
         window=parsed.window,
+        feature_set=parsed.features,
         outdir=parsed.outdir,
     )
 

@@ -67,7 +67,9 @@ def train(
     feature_names:
         Ordered list of feature names used during training.
     model:
-        Trained estimator to serialise with :mod:`joblib`.  When ``None`` a
+        Trained estimator.  For non-LSTM models this will be serialised with
+        :mod:`joblib` to ``model.pkl``.  For LSTM models the Keras model is
+        saved to ``model.h5``.  When ``None`` and ``is_lstm`` is ``False`` a
         simple placeholder object is stored.
     model_dir:
         Root directory under which the symbol folder will be created.
@@ -76,8 +78,9 @@ def train(
         stored so that downstream code can unconditionally apply
         ``scaler.transform``.
     is_lstm:
-        If ``True`` an empty ``model.h5`` file is created to mimic the
-        presence of an LSTM model.
+        When ``True`` the supplied ``model`` is assumed to be a compiled Keras
+        model and will be persisted as ``model.h5``.  Otherwise ``model`` is
+        pickled to ``model.pkl``.
     report:
         Arbitrary metadata to be written to ``report.json``.
     diagnostic:
@@ -89,23 +92,32 @@ def train(
 
     logger.info("Saving artefacts for %s", symbol)
 
+    # Persist the model artefact.  scikit-learn style estimators are pickled
+    # using :mod:`joblib` while Keras models are stored as an ``.h5`` file.  For
+    # LSTM models we also attempt to store ``model.pkl`` for compatibility.  If
+    # the model cannot be pickled and ``is_lstm`` is ``True`` the error is logged
+    # but not raised.
     if model is None:
         model = {"weights": [0.1, 0.2, 0.3]}
     try:
         joblib.dump(model, artefact_dir / "model.pkl")
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.exception("Failed to save model.pkl: %s", exc)
-        raise
-
-    if is_lstm:
-        # The actual LSTM weights would live in this file.  For test purposes we
-        # merely create an empty placeholder so that the strategy can detect the
-        # model type.
-        try:
-            (artefact_dir / "model.h5").write_bytes(b"")
-        except OSError as exc:  # pragma: no cover - best effort logging
-            logger.exception("Failed to write model.h5: %s", exc)
+        if not is_lstm:
             raise
+    if is_lstm:
+        if hasattr(model, "save"):
+            try:
+                model.save(artefact_dir / "model.h5")
+            except Exception as exc:  # pragma: no cover - best effort logging
+                logger.exception("Failed to save model.h5: %s", exc)
+                raise
+        else:  # pragma: no cover - placeholder for simple tests
+            try:
+                (artefact_dir / "model.h5").write_bytes(b"")
+            except OSError as exc:  # pragma: no cover - best effort logging
+                logger.exception("Failed to write model.h5: %s", exc)
+                raise
 
     if scaler is None:
         scaler = _IdentityScaler()
@@ -147,7 +159,6 @@ def train_evaluate(
     """
 
     import pandas as pd  # Imported lazily to keep test environment minimal
-    from sklearn.dummy import DummyClassifier
     from sklearn.metrics import (
         accuracy_score,
         f1_score,
@@ -155,7 +166,10 @@ def train_evaluate(
         roc_curve,
     )
     from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
     import matplotlib.pyplot as plt
+
+    from .models_wrappers import LGBMClassifierModel
 
     logger.info("Training %s model for %s", model_type, symbol)
     model_type_lower = model_type.lower()
@@ -192,10 +206,57 @@ def train_evaluate(
         shuffle=False,
     )
 
-    model = DummyClassifier(strategy="most_frequent")
-    model.fit(X_train, y_train)
-    proba = model.predict_proba(X_test)[:, 1]
-    preds = model.predict(X_test)
+    # Prepare scaler and model according to type
+    scaler: Any | None = None
+    if model_type_lower == "lgbm":
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+        model = LGBMClassifierModel(n_estimators=100, random_state=42)
+        model.fit(X_train_scaled, y_train)
+        proba = model.predict_proba(X_test_scaled)[:, 1]
+        preds = model.predict(X_test_scaled)
+
+    else:  # LSTM
+        import numpy as np
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.layers import LSTM, Dense
+
+        def build_sequences(X_df, y_series, w, dates_series=None):
+            Xs, ys, ds = [], [], []
+            for i in range(w, len(X_df)):
+                Xs.append(X_df.iloc[i - w : i].values)
+                ys.append(y_series.iloc[i])
+                if dates_series is not None:
+                    ds.append(dates_series.iloc[i])
+            return np.array(Xs), np.array(ys), (np.array(ds) if dates_series is not None else None)
+
+        X_train_seq, y_train_seq, _ = build_sequences(X_train, y_train, window)
+        X_test_seq, y_test_seq, dates_test_seq = build_sequences(X_test, y_test, window, dates_test)
+
+        scaler = StandardScaler()
+        n_features = X_train_seq.shape[2]
+        X_train_scaled = scaler.fit_transform(X_train_seq.reshape(-1, n_features)).reshape(X_train_seq.shape)
+        X_test_scaled = scaler.transform(X_test_seq.reshape(-1, n_features)).reshape(X_test_seq.shape)
+
+        model = Sequential(
+            [LSTM(32, input_shape=(window, n_features)), Dense(1, activation="sigmoid")]
+        )
+        model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+        model.fit(X_train_scaled, y_train_seq, epochs=3, batch_size=32, verbose=0)
+        proba = model.predict(X_test_scaled, verbose=0).ravel()
+        preds = (proba > 0.5).astype(int)
+
+        # Adjust variables to match expected names
+        y_test = y_test_seq
+        dates_test = (
+            pd.to_datetime(dates_test_seq)
+            if dates_test_seq is not None
+            else None
+        )
+        y_train = y_train_seq
+        dates_train = dates_train[window:] if dates_train is not None else None
 
     accuracy = accuracy_score(y_test, preds)
     f1 = f1_score(y_test, preds, zero_division=0)
@@ -242,6 +303,7 @@ def train_evaluate(
             list(X.columns),
             model=model,
             model_dir=outdir,
+            scaler=scaler,
             is_lstm=model_type_lower == "lstm",
             report=report,
             diagnostic=diagnostic,

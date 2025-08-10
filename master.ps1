@@ -83,17 +83,21 @@ foreach ($sym in $symbols_list) {
   if ($LASTEXITCODE -ne 0) { Warn ("Entrenamiento falló para {0}" -f $sym) }
 }
 
-# 5) Backtest
+# 5) Backtest (enhanced)
 foreach ($sym in $symbols_list) {
   $csv1 = "data\${sym}_${Fiat}_${Timeframe}.csv"
   $csv2 = "data\${sym}_${Fiat}.csv"
   $csv = $null
   if (Test-Path $csv1) { $csv = $csv1 } elseif (Test-Path $csv2) { $csv = $csv2 }
   if (-not $csv) { continue }
-  Info ("Backtest de {0} ..." -f $sym)
-  & $PY -m src.backtest.run_backtest --symbol $sym --csv $csv --fee 0.001 --slippage 0.0005 --buy-thr 0.6 --sell-thr 0.4 --min-edge 0.02
-  if ($LASTEXITCODE -ne 0) { Warn ("Backtest falló para {0}" -f $sym) }
+  Info ("Backtest (enhanced) de {0} ..." -f $sym)
+  & $PY -m src.backtest.run_backtest_enhanced --symbol $sym --csv $csv `
+        --sma-fast 20 --sma-slow 200 --adx-n 14 --adx-thr 20 `
+        --atr-n 14 --risk-per-trade 0.01 --sl-atr 2.0 --ts-atr 1.0 `
+        --fee 0.001 --slippage 0.0005 --initial-equity 10000
+  if ($LASTEXITCODE -ne 0) { Warn ("Backtest (enhanced) falló para {0}" -f $sym) }
 }
+
 
 # 6) Optimización (solo si existe el optimizador y hay CSV)
 if ($Optimize.IsPresent) {
@@ -111,6 +115,13 @@ if ($Optimize.IsPresent) {
     Warn "Optimizador no encontrado (src\optimize\params_search.py) o CSV ausente. Salto optimización."
   }
 }
+
+# 6.5) Cartera BTC+ETH por paridad de riesgo (si hay ≥2)
+if ($symbols_list.Count -ge 2) {
+  Info "Combinando cartera por paridad de riesgo (equity_enhanced)..."
+  & $PY -m src.backtest.portfolio_combine --symbols ($Symbols) --reports "reports" --enhanced --lookback 90
+}
+
 
 # 7) Resumen → reports/MASTER_SUMMARY_*.md
 $reports = Join-Path $ROOT "reports"

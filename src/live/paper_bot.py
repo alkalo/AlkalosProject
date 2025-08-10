@@ -124,6 +124,17 @@ def _fetch_balances(client, symbol: str) -> Tuple[float, float]:
     asset_qty = float(bal[base]["free"])
     return cash, asset_qty
 
+def quantize_order(exchange, symbol, amount, price=None):
+    market = exchange.market(symbol)
+    prec_amt = market["precision"].get("amount", 8)
+    amount_q = float(exchange.amount_to_lots(symbol, round(amount, prec_amt)))
+    if price is not None:
+        prec_px = market["precision"].get("price", 8)
+        price_q = float(exchange.price_to_precision(symbol, round(price, prec_px)))
+    else:
+        price_q = None
+    return amount_q, price_q
+
 
 def main() -> None:  # pragma: no cover - CLI entry point
     args = _parse_args()

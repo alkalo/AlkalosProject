@@ -1,0 +1,8 @@
+symbol: BTC
+pair: BTC/USDT
+csv: data/BTC_USDT_1d.csv
+horizon: 1
+fee: 0.001
+slippage: 0.0002
+min_edge: 0.0
+model: logreg

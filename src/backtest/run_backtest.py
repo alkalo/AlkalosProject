@@ -1,82 +1,126 @@
-import pandas as pd
+# src/backtest/run_backtest.py
+import argparse
+import os
 import numpy as np
-from pathlib import Path
-import json
-import joblib
-import matplotlib.pyplot as plt
-import talib
-from datetime import datetime
+import pandas as pd
+from src.utils.data import read_ohlcv_csv, add_basic_features
+from src.ml.label import make_labels
+from src.backtest.metrics import max_drawdown, sharpe, sortino, cagr, annual_breakdown
 
-def load_model_bundle(symbol):
-    model_dir = Path("models") / symbol
-    clf = joblib.load(model_dir / "model.pkl")
-    scaler = joblib.load(model_dir / "scaler.pkl")
-    with open(model_dir / "features.json", "r") as f:
-        fjson = json.load(f)
-    return clf, scaler, fjson, model_dir
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--fee", type=float, default=0.001)
+    p.add_argument("--slippage", type=float, default=0.0002)
+    p.add_argument("--buy-thr", type=float, default=0.6)
+    p.add_argument("--sell-thr", type=float, default=0.4)
+    p.add_argument("--min-edge", type=float, default=0.0)
+    p.add_argument("--horizon", type=int, default=1)
+    p.add_argument("--initial-capital", type=float, default=10_000.0)
+    p.add_argument("--allocation", type=float, default=1.0)  # 100% por operación
+    p.add_argument("--outdir", default="reports")
+    return p.parse_args()
 
-def simulate_backtest(prices, probs, args):
-    equity = [1.0]
+def simple_signal_from_features(df: pd.DataFrame, buy_thr: float, sell_thr: float) -> pd.Series:
+    """
+    Ejemplo: señal heurística basada en momentum/RSI:
+    - score en [0,1] (normalizado) y comparamos con thresholds.
+    Esto es un placeholder si no quieres cargar el modelo.
+    """
+    # score proxy: z de ret_5 + rsi scaled
+    z = (df["ret_5"] - df["ret_5"].mean()) / (df["ret_5"].std(ddof=0) + 1e-9)
+    rsi_s = (df["rsi_14"] - 50.0) / 50.0  # approx (-1..+1)
+    score = 1/(1+np.exp(-(0.7*z + 0.3*rsi_s)))  # squash a (0..1)
+    sig = np.where(score >= buy_thr, 1, np.where(score <= sell_thr, -1, 0))
+    return pd.Series(sig, index=df.index, name="signal")
+
+def run_backtest(args):
+    df = read_ohlcv_csv(args.csv)
+    df = add_basic_features(df)
+    df = make_labels(df, horizon=args.horizon, fee=args.fee, slippage=args.slippage, min_edge=args.min_edge)
+
+    # Señales (si no hay modelo cargado)
+    df["signal"] = simple_signal_from_features(df, args.buy_thr, args.sell_thr)
+
+    # PnL: entrada al close de la barra señal, salida tras 'horizon' barras
     trades = []
-    position = 0
-    entry_price = None
+    capital = args.initial_capital
+    equity = []
+    eq = capital
+    pos = 0  # -1, 0, +1 (no gestion multi-posición para mantenerlo simple)
+    for i in range(len(df) - args.horizon):
+        row = df.iloc[i]
+        px_entry = row["close"]
+        sig = row["signal"]
 
-    high = prices.rolling(14).max()
-    low = prices.rolling(14).min()
-    close = prices
-    atr = talib.ATR(high.values, low.values, close.values, timeperiod=14)
-    adx = talib.ADX(high.values, low.values, close.values, timeperiod=14)
+        if sig != 0 and pos == 0:
+            # abrir
+            notional = eq * args.allocation
+            qty = notional / px_entry
+            # fees y slippage al entrar
+            px_entry_eff = px_entry * (1 + args.slippage) if sig > 0 else px_entry * (1 - args.slippage)
+            fee_entry = notional * args.fee
+            pos = sig
+            trades.append({
+                "timestamp": row["timestamp"],
+                "side": "BUY" if sig > 0 else "SELL",
+                "price": float(px_entry_eff),
+                "qty": float(qty),
+                "fee": float(fee_entry),
+            })
+            eq -= fee_entry
 
-    for i in range(len(prices)):
-        prob = float(probs[i])
+        # cerrar tras horizon
+        j = i + args.horizon
+        if pos != 0 and j < len(df):
+            exit_row = df.iloc[j]
+            px_exit = exit_row["close"]
+            px_exit_eff = px_exit * (1 - args.slippage) if pos > 0 else px_exit * (1 + args.slippage)
+            notional = qty * px_exit_eff
+            fee_exit = notional * args.fee
+            pnl = (notional - fee_exit) - (trades[-1]["qty"] * trades[-1]["price"])
+            eq += pnl
+            trades.append({
+                "timestamp": exit_row["timestamp"],
+                "side": "SELL" if pos > 0 else "BUY",
+                "price": float(px_exit_eff),
+                "qty": float(qty),
+                "fee": float(fee_exit),
+                "pnl": float(pnl)
+            })
+            pos = 0
 
-        # filtro de tendencia
-        if adx[i] < 20:
-            position = 0
-            continue
+        equity.append(eq)
 
-        if position == 0 and prob > args.buy_thr:
-            position = 1
-            entry_price = prices[i]
-        elif position == 1:
-            stop_loss_price = entry_price * (1 - atr[i] * 2 / entry_price)
-            if prices[i] < stop_loss_price or prob < args.sell_thr:
-                position = 0
+    eq_series = pd.Series(equity, index=df.iloc[:len(equity)]["timestamp"], name="equity")
+    rets = eq_series.pct_change().fillna(0)
 
-        # actualizar equity
-        daily_ret = (prices[i] / prices[i - 1] - 1) if i > 0 else 0
-        equity.append(equity[-1] * (1 + position * daily_ret))
+    metrics = {
+        "final_equity": float(eq_series.iloc[-1]) if len(eq_series) else args.initial_capital,
+        "return_total": float(eq_series.iloc[-1] / args.initial_capital - 1) if len(eq_series) else 0.0,
+        "cagr": float(cagr(eq_series)),
+        "sharpe": float(sharpe(rets)),
+        "sortino": float(sortino(rets)),
+        "max_drawdown": float(max_drawdown(eq_series)),
+        "n_trades_events": int(len(trades)//2)
+    }
 
-    return np.array(equity), trades, {"final_equity": equity[-1]}
+    # export
+    outdir = os.path.join(args.outdir, args.symbol)
+    os.makedirs(outdir, exist_ok=True)
+    pd.DataFrame(trades).to_csv(os.path.join(outdir, "trades.csv"), index=False)
+    eq_series.to_frame().to_csv(os.path.join(outdir, "equity.csv"))
+    pd.DataFrame(annual_breakdown(eq_series)).to_csv(os.path.join(outdir, "annual_returns.csv"))
+    pd.Series(metrics).to_json(os.path.join(outdir, "summary.json"))
+
+    print(f"[OK] backtest listo en {outdir} para {args.symbol}")
+    for k, v in metrics.items():
+        print(f"- {k}: {v:.4f}" if isinstance(v, float) else f"- {k}: {v}")
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--symbol", required=True)
-    parser.add_argument("--csv", required=True)
-    parser.add_argument("--fee", type=float, default=0.001)
-    parser.add_argument("--slippage", type=float, default=0.0005)
-    parser.add_argument("--buy-thr", type=float, default=0.6)
-    parser.add_argument("--sell-thr", type=float, default=0.4)
-    parser.add_argument("--min-edge", type=float, default=0.02)
-    args = parser.parse_args()
-
-    df = pd.read_csv(args.csv)
-    prices = df["close"].astype(float)
-
-    clf, scaler, fjson, model_dir = load_model_bundle(args.symbol)
-    X = df[fjson["features"]]
-    X_scaled = scaler.transform(X)
-    probs = clf.predict_proba(X_scaled)[:, 1]
-
-    eq, trades, summary = simulate_backtest(prices, probs, args)
-
-    reports_dir = Path("reports"); reports_dir.mkdir(parents=True, exist_ok=True)
-    base = reports_dir / f"{args.symbol}_backtest"
-    plt.plot(eq)
-    plt.savefig(base.with_name(base.stem + "_equity.png"))
-    with open(base.with_name(base.stem + "_summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
+    args = parse_args()
+    run_backtest(args)
 
 if __name__ == "__main__":
     main()

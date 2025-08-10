@@ -154,7 +154,7 @@ def train_evaluate(
         roc_auc_score,
         roc_curve,
     )
-    from sklearn.model_selection import train_test_split
+    from src.ml.data_utils import temporal_train_test_split
     import matplotlib.pyplot as plt
 
     logger.info("Training %s model for %s", model_type, symbol)
@@ -184,12 +184,11 @@ def train_evaluate(
     X = df.drop(columns=[col for col in ["target", "date"] if col in df.columns])
     y = df["target"]
 
-    X_train, X_test, y_train, y_test, dates_train, dates_test = train_test_split(
+    X_train, X_test, y_train, y_test, dates_train, dates_test = temporal_train_test_split(
         X,
         y,
         dates,
         test_size=0.2,
-        shuffle=False,
     )
 
     model = DummyClassifier(strategy="most_frequent")

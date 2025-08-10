@@ -173,7 +173,7 @@ def train_evaluate(
     from src.ml.data_utils import temporal_train_test_split
     import matplotlib.pyplot as plt
 
-    from .models_wrappers import LGBMClassifierModel
+    from lightgbm import LGBMClassifier
 
     logger.info("Training %s model for %s", model_type, symbol)
     model_type_lower = model_type.lower()
@@ -224,7 +224,7 @@ def train_evaluate(
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
-        model = LGBMClassifierModel(n_estimators=100, random_state=42)
+        model = LGBMClassifier(n_estimators=100, random_state=42)
         model.fit(X_train_scaled, y_train)
         proba = model.predict_proba(X_test_scaled)[:, 1]
         preds = model.predict(X_test_scaled)

@@ -13,7 +13,7 @@ def test_no_signal_has_constant_equity_and_no_trades():
     assert trades.empty
     assert (equity == 100).all()
     assert summary["final_equity"] == 100
-    assert summary["num_trades"] == 0
+    assert summary["trades"] == 0
 
 
 def test_buy_then_sell_with_fee():
@@ -27,8 +27,10 @@ def test_buy_then_sell_with_fee():
     qty = 1000 / (10 * (1 + 0.01))
     expected_final = qty * 12 * (1 - 0.01)
     assert summary["final_equity"] == pytest.approx(expected_final)
-    assert summary["num_trades"] == 1
+    assert summary["trades"] == 1
     assert summary["win_rate"] == pytest.approx(1.0)
+    expected_ret = (12 * 0.99) / (10 * 1.01) - 1
+    assert summary["avg_trade_return"] == pytest.approx(expected_ret)
 
 
 def test_stop_loss_triggered():
@@ -39,8 +41,10 @@ def test_stop_loss_triggered():
     summary, equity, trades = backtest_spot(
         df, fee=0.01, initial_cash=1000, stop_loss=0.05
     )
-    assert summary["num_trades"] == 1
+    assert summary["trades"] == 1
     assert summary["win_rate"] == 0.0
+    expected_ret = (9 * 0.99) / (10 * 1.01) - 1
+    assert summary["avg_trade_return"] == pytest.approx(expected_ret)
     qty = 1000 / (10 * (1 + 0.01))
     expected_final = qty * 9 * (1 - 0.01)
     assert summary["final_equity"] == pytest.approx(expected_final)

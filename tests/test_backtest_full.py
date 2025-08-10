@@ -12,7 +12,9 @@ def test_accounting_with_varied_signals_and_fees():
     })
     summary, equity, trades = backtest_spot(df, fee=0.01, initial_cash=100)
     assert len(trades) == 4
-    expected_final = 100 - 10 * 1.01 + 12 * 0.99 - 11 * 1.01 + 13 * 0.99
+    ratio1 = (12 * 0.99) / (10 * 1.01)
+    ratio2 = (13 * 0.99) / (11 * 1.01)
+    expected_final = 100 * ratio1 * ratio2
     assert summary["final_equity"] == pytest.approx(expected_final)
 
 

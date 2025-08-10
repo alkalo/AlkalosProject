@@ -1,7 +1,7 @@
 import numpy as np
 
-from models import KerasLSTMClassifier
-from signal_strategy import SignalStrategy
+from src.ml.models_wrappers import KerasLSTMClassifier
+from src.backtest.strategy import SignalStrategy
 
 
 class DummyKerasModel:

@@ -1,5 +1,5 @@
 from src.ml.train import train
-from src.strategies.signal_strategy import SignalStrategy
+from src.backtest.strategy import SignalStrategy
 
 
 def test_signal_strategy_loads_features(tmp_path):

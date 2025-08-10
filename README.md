@@ -29,9 +29,13 @@ un modelo y generación de señales para backtesting y paper trading.
    ```powershell
    python -m src.backtest.run_backtest --symbol BTC --csv data/BTC_USD_1d.csv
    ```
-4. **Paper** – Lanzar el bot de paper trading:
+4. **Paper/Live** – Lanzar el bot de trading:
    ```powershell
-   python -m src.live.paper_bot --symbol BTC --csv data/BTC_USD_1d.csv
+   # Paper (modo por defecto)
+   python -m src.live.paper_bot --symbol BTC/USDT --csv data/BTC_USDT_1d.csv
+
+   # Live (requiere credenciales y un exchange soportado por ccxt)
+   python -m src.live.paper_bot --symbol BTC/USDT --csv data/BTC_USDT_1d.csv --mode live --exchange binance
    ```
 
 ## Artefactos y reportes
@@ -41,16 +45,16 @@ un modelo y generación de señales para backtesting y paper trading.
   `report.json`, `diagnostic.png`)
 - **Backtests**: `reports/{symbol}_summary.json`,
   `reports/{symbol}_equity.png`, `reports/{symbol}_trades.csv`
-- **Paper bot**: `reports/paper_bot_{symbol}.csv`
+- **Bot de trading**: `reports/paper_bot_{symbol}.csv`
 - **Logs**: `logs/data_fetch.log`, `logs/paper_bot.log`
 
 ## Ajustar fees y umbrales
 
 - **Backtest**: parámetros `--fee`, `--slippage`, `--buy-thr`, `--sell-thr` y
   `--min-edge` de `src/backtest/run_backtest.py`.
-- **Paper bot**: constantes `FEE_RATE` y `SLIPPAGE`, y valores `buy_thr`,
-  `sell_thr` y `min_edge` al instanciar `SignalStrategy` en
-  `src/live/paper_bot.py`.
+- **Bot de trading**: constantes `FEE_RATE` y `SLIPPAGE`, valores `buy_thr`,
+  `sell_thr` y `min_edge` al instanciar `SignalStrategy`, además de las
+  opciones `--mode`, `--exchange`, `--max-allocation` y `--max-drawdown`.
 
 ## Módulos experimentales
 

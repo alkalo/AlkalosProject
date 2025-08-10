@@ -11,6 +11,7 @@
     4) Backtest DEFAULT
     5) Optimize → lee best_params.json → Backtest OPTIMIZED (saltable)
     6) Comparativa DEFAULT vs OPTIMIZED vs PORTFOLIO (tabla consola + CSV)
+    7) Bot de trading (paper/live) opcional
 
   Uso típico:
     .\master.ps1 -Symbols "BTC,ETH" -Fiat "USD" -Days 1825 -Model "lgbm" -Fee 0.001 -Slippage 0.0005
@@ -19,6 +20,7 @@
     -ForceFetch   → re-descarga datos aunque existan
     -ForceCCXT    → usa CCXT directamente (recomendado si YF falla)
     -SkipOptimize → salta optimización y backtest optimized
+    -BotMode      → paper | live | none (paper por defecto)
 ===================================================================== #>
 
 [CmdletBinding()]
@@ -36,6 +38,8 @@ param(
   [double]$BuyThr = 0.6,
   [double]$SellThr = 0.4,
   [double]$MinEdge = 0.02,
+  [ValidateSet("paper","live","none")]
+  [string]$BotMode = "paper",
   [switch]$ForceFetch,
   [switch]$ForceCCXT,
   [switch]$SkipOptimize
@@ -323,6 +327,25 @@ if (Test-Path $compCsv) {
   Ok "Comparativa guardada en $compCsv"
 } else {
   Warn "No se generó comparativa."
+}
+
+# ---------- 7) Trading bot (paper/live) ----------
+if ($BotMode -ne "none") {
+  foreach ($sym in $symbolsArr) {
+    $csv = CsvPath $sym $Fiat
+    if (-not (Test-ValidCsv $csv)) { Warn "Saltando bot: CSV inválido $csv"; continue }
+    $pair = "$sym/$Fiat"
+    Info "Lanzando bot $BotMode para $pair..."
+    $args = @("-m","src.live.paper_bot","--symbol",$pair,"--csv",$csv,"--window",$Window.ToString(),"--mode",$BotMode)
+    try {
+      Start-Process -FilePath "python" -ArgumentList $args -WorkingDirectory (Get-Location).Path -NoNewWindow
+      Ok "Bot iniciado para $pair"
+    } catch {
+      Err "No se pudo iniciar bot para $pair"
+    }
+  }
+} else {
+  Warn "Bot deshabilitado (BotMode=none)"
 }
 
 exit 0

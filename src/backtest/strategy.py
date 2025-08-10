@@ -58,8 +58,22 @@ class SignalStrategy:
             self.feature_names = []
             self.is_lstm = False
 
-    def _predict_proba_last(self, X: np.ndarray) -> float:
+    def _prepare_input(self, X: Any) -> np.ndarray:
+        """Select the relevant columns and apply scaling/reshaping."""
+        if isinstance(X, pd.DataFrame):
+            X = X[self.feature_names]
+            X = X.values
+        else:  # assume array-like
+            X = np.asarray(X)
+        if self.scaler is not None:
+            X = self.scaler.transform(X)
+        if self.is_lstm:
+            X = X.reshape(1, X.shape[0], X.shape[1])
+        return X
+
+    def _predict_proba_last(self, X: Any) -> float:
         """Return probability of the positive class for the last sample."""
+        X = self._prepare_input(X)
         proba = self.model.predict_proba(X)
         proba = np.asarray(proba)
         if proba.ndim == 1:
@@ -69,19 +83,13 @@ class SignalStrategy:
         return proba[-1, 1]
 
     # Public wrapper used in tests
-    def predict_proba_last(self, X: np.ndarray) -> float:  # pragma: no cover - thin wrapper
+    def predict_proba_last(self, X: Any) -> float:  # pragma: no cover - thin wrapper
         return self._predict_proba_last(X)
-
 
 
     def generate_signal(self, df_window: pd.DataFrame) -> Literal["BUY", "SELL", "HOLD"]:
         """Generate trading signal from a window of data."""
-        X = df_window[self.feature_names].values
-        if self.scaler is not None:
-            X = self.scaler.transform(X)
-        if self.is_lstm:
-            X = X.reshape(1, X.shape[0], X.shape[1])
-        proba = self.predict_proba_last(X)
+        proba = self._predict_proba_last(df_window)
         if proba >= self.buy_thr and (proba - 0.5) >= self.min_edge:
             return "BUY"
         if proba <= self.sell_thr and (0.5 - proba) >= self.min_edge:

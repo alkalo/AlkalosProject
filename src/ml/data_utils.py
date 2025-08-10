@@ -9,36 +9,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .feature_engineering import add_simple_returns, add_tech_indicators
+from .feature_engineering import (
+    add_simple_returns,
+    add_tech_indicators,
+    make_lagged_features,
+)
 from typing import Sequence, Tuple, Union
-from typing import Tuple, Sequence, Union
-
-
-def make_lagged_features(series: pd.Series, window: int) -> Tuple[pd.DataFrame, pd.Series]:
-    """Create lagged features for a univariate series.
-
-    Parameters
-    ----------
-    series:
-        Input time series.
-    window:
-        Number of past observations to include as features.
-
-    Returns
-    -------
-    X, y:
-        Feature ``DataFrame`` where each column represents a lagged value and
-        the corresponding target ``Series`` aligned such that ``y_t`` depends
-        only on values strictly prior to ``t``.
-    """
-
-    data = {f"lag_{i}": series.shift(i) for i in range(1, window + 1)}
-    X = pd.DataFrame(data)
-    y = series.copy()
-    df = pd.concat([X, y], axis=1).dropna()
-    X = df[[f"lag_{i}" for i in range(1, window + 1)]]
-    y = df[series.name]
-    return X, y
 
 
 ArrayLike = Union[pd.DataFrame, pd.Series]
@@ -99,7 +75,8 @@ def build_features(
     df: pd.DataFrame,
     *,
     target_col: str = "target",
-    feature_set: str = "returns",
+    feature_set: str = "lags",
+    window: int = 5,
 ) -> Tuple[pd.DataFrame, pd.Series, Sequence[str]]:
     """Generate feature matrix and target aligned consistently.
 
@@ -111,18 +88,24 @@ def build_features(
     target_col:
         Name of the target column.
     feature_set:
-        Either ``"returns"`` for a single simple return feature or
-        ``"indicators"`` for a richer set of technical indicators.
+        ``"lags"`` to use past price information or ``"tech"`` for a small
+        collection of technical indicators.
+    window:
+        Number of lagged observations when ``feature_set`` is ``"lags"``.
     """
     df = df.copy()
-    if feature_set == "indicators":
+    if feature_set == "tech":
         df = add_tech_indicators(df)
         feature_cols = [
             c for c in df.columns if c not in {target_col, "date", "close"}
         ]
     else:
-        df = add_simple_returns(df)
-        feature_cols = ["return"]
+        lag_df, _ = make_lagged_features(df["close"], window)
+        feature_cols = list(lag_df.columns)
+        df = pd.concat(
+            [lag_df, df[[target_col] + (["date"] if "date" in df.columns else [])]],
+            axis=1,
+        )
 
     df = df.dropna(subset=feature_cols + [target_col])
     X = df[feature_cols]

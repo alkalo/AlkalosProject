@@ -48,8 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--features",
-        choices=["returns", "indicators"],
-        default="returns",
+        choices=["lags", "tech"],
+        default="lags",
         help="Feature set to use",
     )
     parser.add_argument(

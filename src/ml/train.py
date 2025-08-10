@@ -19,7 +19,7 @@ import joblib
 import logging
 
 from src.utils.env import get_logs_dir, get_models_dir
-from .feature_engineering import add_simple_returns, add_tech_indicators
+from src.ml.data_utils import temporal_train_test_split, build_features
 
 
 logger = logging.getLogger(__name__)
@@ -149,7 +149,7 @@ def train_evaluate(
     model_type: str,
     horizon: int,
     window: int,
-    feature_set: str = "returns",
+    feature_set: str = "lags",
     outdir: str = str(get_models_dir()),
 ) -> None:
     """Train a trivial model and persist artefacts.
@@ -157,7 +157,9 @@ def train_evaluate(
     The implementation is intentionally lightweight; it trains a simple model on
     the provided CSV file and stores artefacts using :func:`train`.  The CSV is
     expected to contain a ``target`` column and optionally a ``date`` column
-    used solely for reporting purposes.
+    used solely for reporting purposes.  ``feature_set`` selects between a lagged
+    price representation (``"lags"``) and a handful of technical indicators
+    (``"tech"``).
     """
 
     import pandas as pd  # Imported lazily to keep test environment minimal
@@ -167,10 +169,8 @@ def train_evaluate(
         roc_auc_score,
         roc_curve,
     )
-    from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import StandardScaler
 
-    from src.ml.data_utils import temporal_train_test_split
     import matplotlib.pyplot as plt
 
     from .models_wrappers import LGBMClassifierModel
@@ -198,17 +198,12 @@ def train_evaluate(
         logger.error("CSV must contain a 'target' column")
         raise ValueError("CSV must contain a 'target' column")
 
-    if feature_set == "indicators":
-        df = add_tech_indicators(df)
-        feature_cols = [c for c in df.columns if c not in {"target", "date", "close"}]
-    else:
-        df = add_simple_returns(df)
-        feature_cols = ["return"]
-
-    df = df.dropna(subset=feature_cols + ["target"])
     dates = pd.to_datetime(df["date"]) if "date" in df.columns else None
-    X = df[feature_cols]
-    y = df["target"]
+    X, y, feature_cols = build_features(
+        df, target_col="target", feature_set=feature_set, window=window
+    )
+    if dates is not None:
+        dates = dates.loc[X.index]
 
     X_train, X_test, y_train, y_test, dates_train, dates_test = temporal_train_test_split(
         X,
@@ -311,7 +306,7 @@ def train_evaluate(
     try:
         train(
             symbol,
-            list(X.columns),
+            feature_cols,
             model=model,
             model_dir=outdir,
             scaler=scaler,

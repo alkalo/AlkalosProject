@@ -13,6 +13,7 @@ import os
 from io import BytesIO
 from pathlib import Path
 from typing import Sequence, Any
+import importlib
 
 import joblib
 import logging
@@ -155,6 +156,14 @@ def train_evaluate(
     import matplotlib.pyplot as plt
 
     logger.info("Training %s model for %s", model_type, symbol)
+    model_type_lower = model_type.lower()
+    if model_type_lower == "lstm":
+        try:
+            importlib.import_module("tensorflow")
+        except ModuleNotFoundError as exc:
+            raise ImportError(
+                "TensorFlow no está instalado; instala tensorflow-cpu"
+            ) from exc
 
     try:
         df = pd.read_csv(csv_path)
@@ -231,7 +240,7 @@ def train_evaluate(
             list(X.columns),
             model=model,
             model_dir=outdir,
-            is_lstm=model_type.lower() == "lstm",
+            is_lstm=model_type_lower == "lstm",
             report=report,
             diagnostic=diagnostic,
         )

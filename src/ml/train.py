@@ -19,6 +19,7 @@ import joblib
 import logging
 
 from src.utils.env import get_logs_dir, get_models_dir
+from .feature_engineering import add_simple_returns, add_tech_indicators
 
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ def train_evaluate(
     model_type: str,
     horizon: int,
     window: int,
+    feature_set: str = "returns",
     outdir: str = str(get_models_dir()),
 ) -> None:
     """Train a trivial model and persist artefacts.
@@ -180,8 +182,16 @@ def train_evaluate(
         logger.error("CSV must contain a 'target' column")
         raise ValueError("CSV must contain a 'target' column")
 
+    if feature_set == "indicators":
+        df = add_tech_indicators(df)
+        feature_cols = [c for c in df.columns if c not in {"target", "date", "close"}]
+    else:
+        df = add_simple_returns(df)
+        feature_cols = ["return"]
+
+    df = df.dropna(subset=feature_cols + ["target"])
     dates = pd.to_datetime(df["date"]) if "date" in df.columns else None
-    X = df.drop(columns=[col for col in ["target", "date"] if col in df.columns])
+    X = df[feature_cols]
     y = df["target"]
 
     X_train, X_test, y_train, y_test, dates_train, dates_test = train_test_split(

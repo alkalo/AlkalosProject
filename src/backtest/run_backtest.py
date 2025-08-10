@@ -75,6 +75,24 @@ def main() -> None:
         logger.exception("Failed to read %s: %s", args.csv, exc)
         return
 
+    model_base = get_models_dir() / args.symbol
+    try:
+        with open(model_base / "features.json", "r", encoding="utf-8") as fh:
+            feature_names = json.load(fh)
+    except FileNotFoundError:
+        logger.error("features.json not found for %s", args.symbol)
+        return
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to load features.json: %s", exc)
+        return
+
+    missing = [f for f in feature_names if f not in df.columns]
+    if missing:
+        logger.error("CSV missing required features: %s", ", ".join(missing))
+        return
+
+    feature_df = df[feature_names]
+
     try:
         strategy = SignalStrategy(
             args.symbol,
@@ -90,12 +108,12 @@ def main() -> None:
     logger.info("Generating signals")
     signals = []
     window_size = args.window_size
-    for i in range(len(df)):
+    for i in range(len(feature_df)):
         if window_size and window_size > 0:
             start = max(0, i + 1 - window_size)
-            window = df.iloc[start : i + 1]
+            window = feature_df.iloc[start : i + 1]
         else:
-            window = df.iloc[: i + 1]
+            window = feature_df.iloc[: i + 1]
         try:
             signals.append(strategy.generate_signal(window))
         except Exception as exc:  # pragma: no cover - best effort logging
@@ -131,6 +149,8 @@ def main() -> None:
             json.dump(serialisable_summary, fh, indent=2)
         trades.to_csv(trades_path, index=False)
 
+        import matplotlib
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(10, 4))

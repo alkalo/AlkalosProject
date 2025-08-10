@@ -8,3 +8,9 @@
 1 Failed download:
 2025-08-10 16:21:03,585 ERROR yfinance: ['ETH-USD']: YFInvalidPeriodError("ETH-USD: Period '3650' is invalid, must be one of: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max")
 2025-08-10 16:21:03,588 INFO __main__: Saved 0 rows to data\ETH_USD_1d.csv
+2025-08-10 17:26:54,322 INFO __main__: Fetching BTC from yf
+2025-08-10 17:26:56,641 ERROR yfinance: Failed to get ticker 'BTC-USD' reason: Expecting value: line 1 column 1 (char 0)
+2025-08-10 17:26:56,771 ERROR yfinance: 
+1 Failed download:
+2025-08-10 17:26:56,771 ERROR yfinance: ['BTC-USD']: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')
+2025-08-10 17:26:56,775 INFO __main__: Saved 0 rows to data\BTC_USD_1d.csv

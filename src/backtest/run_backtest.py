@@ -1,166 +1,200 @@
 import argparse
-import json
-import logging
-
+from pathlib import Path
 import pandas as pd
+import numpy as np
+import json
+import joblib
+from datetime import datetime
 
-from .strategy import SignalStrategy
-from src.backtest.engine import backtest_spot
-from src.utils.env import get_models_dir, get_reports_dir
-from src.utils.logging_config import setup_logging
+from src.utils.features_io import load_features_json
+from src.ml.data_utils import build_features  # usaremos para fallback de features
 
+import matplotlib
+matplotlib.use("Agg")  # para correr sin GUI
+import matplotlib.pyplot as plt
 
-logger = logging.getLogger(__name__)
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--csv", required=True, help="OHLCV o features")
+    p.add_argument("--fee", type=float, default=0.001)
+    p.add_argument("--slippage", type=float, default=0.0005)
+    p.add_argument("--buy-thr", type=float, default=0.6)
+    p.add_argument("--sell-thr", type=float, default=0.4)
+    p.add_argument("--min-edge", type=float, default=0.0, help="margen mínimo prob-0.5")
+    p.add_argument("--initial-train", type=int, default=300, help="mín. barras para primer entreno interno (si aplica)")
+    return p.parse_args()
 
+def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    for col in ["timestamp", "date", "Datetime", "Date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
+            df = df.set_index(col).sort_index()
+            return df
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors="coerce", utc=True)
+    return df.sort_index()
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a spot backtest using a signal strategy")
-    parser.add_argument("--symbol", choices=["BTC", "ETH"], required=True, help="Trading symbol")
-    parser.add_argument("--csv", required=True, help="Path to CSV file with price data")
-    parser.add_argument("--fee", type=float, default=0.006, help="Trading fee proportion")
-    parser.add_argument("--slippage", type=float, default=0.0005, help="Slippage proportion")
-    parser.add_argument("--buy-thr", dest="buy_thr", type=float, default=0.6, help="Buy probability threshold")
-    parser.add_argument("--sell-thr", dest="sell_thr", type=float, default=0.4, help="Sell probability threshold")
-    parser.add_argument("--min-edge", dest="min_edge", type=float, default=0.02, help="Minimum edge over 0.5 to trigger a trade")
-    parser.add_argument("--initial-cash", dest="initial_cash", type=float, default=1000.0, help="Initial cash for the backtest")
-    parser.add_argument(
-        "--window-size",
-        dest="window_size",
-        type=int,
-        default=0,
-        help="Window size for signal generation (0 uses full history)",
-    )
-    parser.add_argument(
-        "--config",
-        dest="config",
-        help="Path to JSON config file specifying thresholds and window size",
-    )
-    return parser.parse_args()
+def load_model_bundle(symbol: str):
+    model_dir = Path("models") / symbol
+    clf = joblib.load(model_dir / "model.pkl")
+    scaler = joblib.load(model_dir / "scaler.pkl")
+    fjson = load_features_json(model_dir / "features.json")
+    return clf, scaler, fjson
 
+def ensure_features(df_raw: pd.DataFrame, fjson: dict) -> pd.DataFrame:
+    cols = fjson["columns"]
+    # si ya están, ordenamos y devolvemos
+    if set(cols).issubset(set(df_raw.columns)):
+        return df_raw.reindex(columns=sorted(set(df_raw.columns))).loc[:, cols].copy()
 
-def main() -> None:
-    args = parse_args()
+    # si no están, construimos features con el mismo feature_set/window
+    feature_set = fjson.get("feature_set", "lags")
+    window = int(fjson.get("window", 5))
+    horizon = int(fjson.get("horizon", 1))
+    X, _, _ = build_features(df_raw.copy(), feature_set=feature_set, window=window, horizon=horizon)
 
-    # Override CLI options with values from configuration file if provided
-    if args.config:
-        try:
-            with open(args.config, "r", encoding="utf-8") as fh:
-                cfg = json.load(fh)
-        except Exception as exc:  # pragma: no cover - best effort logging
-            logger.error("Failed to load config file %s: %s", args.config, exc)
-            return
-        args.buy_thr = cfg.get("buy_thr", args.buy_thr)
-        args.sell_thr = cfg.get("sell_thr", args.sell_thr)
-        args.min_edge = cfg.get("min_edge", args.min_edge)
-        args.window_size = cfg.get("window", cfg.get("window_size", args.window_size))
-
-    setup_logging("run_backtest")
-
-    logger.info("Starting backtest for %s", args.symbol)
-    try:
-        df = pd.read_csv(args.csv, parse_dates=True)
-    except FileNotFoundError:
-        logger.error("CSV file not found: %s", args.csv)
-        return
-    except Exception as exc:  # pragma: no cover - best effort logging
-        logger.exception("Failed to read %s: %s", args.csv, exc)
-        return
-
-    model_base = get_models_dir() / args.symbol
-    try:
-        with open(model_base / "features.json", "r", encoding="utf-8") as fh:
-            feature_names = json.load(fh)
-    except FileNotFoundError:
-        logger.error("features.json not found for %s", args.symbol)
-        return
-    except Exception as exc:  # pragma: no cover - best effort logging
-        logger.exception("Failed to load features.json: %s", exc)
-        return
-
-    missing = [f for f in feature_names if f not in df.columns]
+    # asegurar orden según features.json
+    missing = [c for c in cols if c not in X.columns]
     if missing:
-        logger.error("CSV missing required features: %s", ", ".join(missing))
-        return
+        raise ValueError(f"Faltan columnas tras build_features: {missing}")
+    X = X.loc[:, cols].copy()
+    return X
 
-    feature_df = df[feature_names]
+def backtest(df_price: pd.DataFrame, X: pd.DataFrame, clf, scaler, args):
+    # escalado
+    X_scaled = pd.DataFrame(scaler.transform(X), index=X.index, columns=X.columns)
 
-    try:
-        costs = (args.fee + args.slippage) * 2
-        strategy = SignalStrategy(
-            args.symbol,
-            model_dir=str(get_models_dir()),
-            buy_thr=args.buy_thr,
-            sell_thr=args.sell_thr,
-            min_edge=args.min_edge,
-            costs=costs,
-        )
-    except Exception as exc:  # pragma: no cover - best effort logging
-        logger.exception("Failed to initialise strategy: %s", exc)
-        return
+    equity = []
+    trades = []
 
-    logger.info("Generating signals")
-    signals = []
-    window_size = args.window_size
-    for i in range(len(feature_df)):
-        if window_size and window_size > 0:
-            start = max(0, i + 1 - window_size)
-            window = feature_df.iloc[start : i + 1]
+    cash = 1.0  # equity normalizada
+    position = 0  # -1, 0, 1
+    entry_price = None
+
+    # asumimos que df_price tiene 'close'
+    if "close" not in df_price.columns:
+        raise ValueError("El CSV debe contener columna 'close' para simular PnL.")
+
+    prices = df_price["close"].astype(float)
+    probs = getattr(clf, "predict_proba")(X_scaled)[:, 1]
+
+    for i in range(len(prices)):
+        price = float(prices.iloc[i])
+        prob = float(probs[i])
+        dt = prices.index[i]
+
+        # decisión
+        edge = abs(prob - 0.5)
+        action = "hold"
+        if edge >= args.min_edge:
+            if prob >= args.buy_thr and position <= 0:
+                # cerrar corto si lo hubiera
+                if position == -1 and entry_price is not None:
+                    # cerrar corto → pagas fee*2 y slippage*2
+                    pnl = (entry_price - price) / entry_price
+                    pnl -= (args.fee + args.slippage) * 2
+                    cash *= (1 + pnl)
+                    trades.append({"datetime": dt.isoformat(), "side": "BUY_to_close_short", "price": price, "equity": cash})
+                # abrir largo
+                position = 1
+                entry_price = price
+                trades.append({"datetime": dt.isoformat(), "side": "BUY", "price": price, "equity": cash})
+                action = "long"
+
+            elif prob <= args.sell_thr and position >= 0:
+                if position == 1 and entry_price is not None:
+                    # cerrar largo
+                    pnl = (price - entry_price) / entry_price
+                    pnl -= (args.fee + args.slippage) * 2
+                    cash *= (1 + pnl)
+                    trades.append({"datetime": dt.isoformat(), "side": "SELL_to_close_long", "price": price, "equity": cash})
+                # abrir corto
+                position = -1
+                entry_price = price
+                trades.append({"datetime": dt.isoformat(), "side": "SELL", "price": price, "equity": cash})
+                action = "short"
+
+        # marca de equity mark-to-market simple (sin apalancamiento)
+        if position == 1 and entry_price is not None:
+            mtm = (price - entry_price) / entry_price
+            equity.append(cash * (1 + mtm))
+        elif position == -1 and entry_price is not None:
+            mtm = (entry_price - price) / entry_price
+            equity.append(cash * (1 + mtm))
         else:
-            window = feature_df.iloc[: i + 1]
-        try:
-            signals.append(strategy.generate_signal(window))
-        except Exception as exc:  # pragma: no cover - best effort logging
-            logger.exception("Signal generation failed: %s", exc)
-            return
-    df["signal"] = signals
+            equity.append(cash)
 
-    try:
-        summary, equity, trades = backtest_spot(
-            df,
-            fee=args.fee,
-            slippage=args.slippage,
-            initial_cash=args.initial_cash,
-        )
-    except Exception as exc:  # pragma: no cover - best effort logging
-        logger.exception("Backtest failed: %s", exc)
-        return
-
-    reports_dir = get_reports_dir()
-    reports_dir.mkdir(exist_ok=True)
-
-    summary_path = reports_dir / f"{args.symbol}_summary.json"
-    equity_path = reports_dir / f"{args.symbol}_equity.png"
-    trades_path = reports_dir / f"{args.symbol}_trades.csv"
-
-    logger.info("Writing reports to %s", reports_dir)
-    try:
-        # Ensure all summary values are JSON serialisable
-        serialisable_summary = {
-            k: (float(v) if hasattr(v, "__float__") else v) for k, v in summary.items()
-        }
-        with open(summary_path, "w", encoding="utf-8") as fh:
-            json.dump(serialisable_summary, fh, indent=2)
-        trades.to_csv(trades_path, index=False)
-
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        plt.figure(figsize=(10, 4))
-        if hasattr(equity, "plot"):
-            equity.plot(ax=plt.gca())
+    equity_series = pd.Series(equity, index=prices.index, name="equity")
+    # cerrar posición al final con fees/slippage
+    if position != 0 and entry_price is not None:
+        final_price = float(prices.iloc[-1])
+        if position == 1:
+            pnl = (final_price - entry_price) / entry_price
         else:
-            plt.plot(equity)
-        plt.title(f"{args.symbol} Equity Curve")
-        plt.tight_layout()
-        plt.savefig(equity_path)
-        plt.close()
-    except OSError as exc:  # pragma: no cover - best effort logging
-        logger.exception("Failed to write report files: %s", exc)
-        return
+            pnl = (entry_price - final_price) / entry_price
+        pnl -= (args.fee + args.slippage) * 2
+        cash *= (1 + pnl)
+        trades.append({"datetime": prices.index[-1].isoformat(), "side": "FLAT", "price": final_price, "equity": cash})
 
-    logger.info("Backtest completed for %s", args.symbol)
+    summary = {
+        "symbol": args.symbol,
+        "start": prices.index[0].isoformat(),
+        "end": prices.index[-1].isoformat(),
+        "n_bars": int(len(prices)),
+        "final_equity": cash,
+        "return_pct": (cash - 1.0) * 100.0,
+        "trades": len([t for t in trades if t["side"] in ("BUY", "SELL")]),
+        "params": {
+            "buy_thr": args.buy_thr,
+            "sell_thr": args.sell_thr,
+            "min_edge": args.min_edge,
+            "fee": args.fee,
+            "slippage": args.slippage,
+        },
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    return equity_series, trades, summary
 
+def main():
+    args = parse_args()
+    df = pd.read_csv(args.csv)
+    df = ensure_datetime_index(df)
+
+    clf, scaler, fjson = load_model_bundle(args.symbol)
+
+    # asegurar 'close' para PnL
+    if "close" not in df.columns:
+        raise ValueError("El CSV debe contener 'close'.")
+
+    # construir/validar features y reordenar según features.json
+    X = ensure_features(df.copy(), fjson)
+
+    # ejecutar backtest
+    eq, trades, summary = backtest(df, X, clf, scaler, args)
+
+    # persistir
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    base = reports_dir / f"{args.symbol}"
+
+    # equity
+    (base.with_suffix("_equity.png")).parent.mkdir(parents=True, exist_ok=True)
+    plt.figure()
+    eq.plot()
+    plt.title(f"Equity Curve - {args.symbol}")
+    plt.xlabel("Time"); plt.ylabel("Equity")
+    plt.tight_layout()
+    plt.savefig(base.with_suffix("_equity.png"))
+
+    # trades csv
+    pd.DataFrame(trades).to_csv(base.with_suffix("_trades.csv"), index=False)
+
+    # summary json
+    with (base.with_suffix("_summary.json")).open("w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    print(f"[OK] backtest listo en /reports para {args.symbol}")
 
 if __name__ == "__main__":
     main()

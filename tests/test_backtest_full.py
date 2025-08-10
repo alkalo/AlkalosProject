@@ -16,6 +16,7 @@ def test_accounting_with_varied_signals_and_fees():
     ratio2 = (13 * 0.99) / (11 * 1.01)
     expected_final = 100 * ratio1 * ratio2
     assert summary["final_equity"] == pytest.approx(expected_final)
+    assert summary["trades"] == 2
 
 
 def test_sharpe_and_drawdown_on_synthetic_data():
@@ -23,13 +24,17 @@ def test_sharpe_and_drawdown_on_synthetic_data():
         "close": [100, 105, 95, 100, 110],
         "signal": ["BUY", "HOLD", "HOLD", "HOLD", "SELL"],
     })
-    _, equity, _ = backtest_spot(df, initial_cash=100, fee=0.0)
+    summary, equity, _ = backtest_spot(df, initial_cash=100, fee=0.0)
     returns = equity.pct_change().dropna()
-    sharpe = returns.mean() / returns.std() * np.sqrt(len(returns))
-    assert sharpe == pytest.approx(0.6349, rel=1e-3)
+    sharpe = returns.mean() / returns.std() * np.sqrt(252)
     running_max = equity.cummax()
     drawdown = equity / running_max - 1
-    assert drawdown.min() == pytest.approx(-0.095238, rel=1e-3)
+    max_dd = -drawdown.min()
+    assert summary["sharpe"] == pytest.approx(sharpe, rel=1e-3)
+    assert summary["max_drawdown"] == pytest.approx(max_dd, rel=1e-3)
+    years = len(equity) / 252
+    expected_cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1 / years) - 1
+    assert summary["cagr"] == pytest.approx(expected_cagr, rel=1e-3)
 
 
 def test_stop_loss_and_trade_limits_respected():
@@ -40,3 +45,4 @@ def test_stop_loss_and_trade_limits_respected():
     summary, _, trades = backtest_spot(df, initial_cash=100, fee=0.0)
     assert trades["type"].tolist() == ["BUY", "SELL"]
     assert summary["final_equity"] == 90
+    assert summary["trades"] == 1

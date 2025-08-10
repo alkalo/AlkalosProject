@@ -18,23 +18,15 @@ import importlib
 import joblib
 import logging
 
-from src.utils.env import get_logs_dir, get_models_dir
+from src.utils.env import get_models_dir
+from src.utils.logging_config import setup_logging
 from .feature_engineering import add_simple_returns, add_tech_indicators
 
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_dirs(path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-
-
-_ensure_dirs(str(get_logs_dir() / "train.log"))
-logging.basicConfig(
-    filename=str(get_logs_dir() / "train.log"),
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+setup_logging("train")
 
 
 class _IdentityScaler:

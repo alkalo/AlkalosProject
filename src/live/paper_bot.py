@@ -17,6 +17,7 @@ from typing import Tuple
 import pandas as pd
 
 from src.backtest.strategy import SignalStrategy
+from src.utils.env import get_logs_dir, get_reports_dir
 
 FEE_RATE = 0.006
 SLIPPAGE = 0.0005
@@ -57,9 +58,9 @@ def _read_window(path: str, window: int) -> Tuple[pd.DataFrame, pd.Series]:
 def main() -> None:  # pragma: no cover - CLI entry point
     args = _parse_args()
 
-    _ensure_dirs("logs/paper_bot.log")
+    _ensure_dirs(str(get_logs_dir() / "paper_bot.log"))
     logging.basicConfig(
-        filename="logs/paper_bot.log",
+        filename=str(get_logs_dir() / "paper_bot.log"),
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
@@ -74,7 +75,7 @@ def main() -> None:  # pragma: no cover - CLI entry point
     asset_qty = 0.0
     equity = cash
 
-    report_path = Path("reports") / f"paper_bot_{args.symbol}.csv"
+    report_path = get_reports_dir() / f"paper_bot_{args.symbol}.csv"
     _ensure_dirs(str(report_path))
     write_header = not report_path.exists()
 

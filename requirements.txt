@@ -3,3 +3,4 @@ joblib
 pandas
 requests
 yfinance
+python-dotenv

@@ -10,6 +10,8 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from src.utils.env import get_models_dir
+
 
 class SignalStrategy:
     """Utility strategy used during backtesting.
@@ -23,7 +25,7 @@ class SignalStrategy:
         self,
 
         symbol_or_model,
-        model_dir: str = "models",
+        model_dir: str = str(get_models_dir()),
         *,
         buy_thr: float = 0.6,
         sell_thr: float = 0.4,

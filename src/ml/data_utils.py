@@ -10,7 +10,7 @@ from __future__ import annotations
 import pandas as pd
 
 from .feature_engineering import add_simple_returns, add_tech_indicators
-from typing import Tuple, Sequence
+from typing import Tuple, Sequence, Union
 
 
 def make_lagged_features(series: pd.Series, window: int) -> Tuple[pd.DataFrame, pd.Series]:

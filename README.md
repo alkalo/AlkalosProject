@@ -52,6 +52,12 @@ un modelo y generación de señales para backtesting y paper trading.
   `sell_thr` y `min_edge` al instanciar `SignalStrategy` en
   `src/live/paper_bot.py`.
 
+## Módulos experimentales
+
+Las utilidades `src/ml/feature_engineering.py` y `src/ml/data_utils.py`
+se mantienen para exploraciones fuera del flujo principal de entrenamiento y
+pueden cambiar sin previo aviso.
+
 ## Descargo de responsabilidad
 
 Este código se proporciona solo con fines educativos. No constituye asesoría

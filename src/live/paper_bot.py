@@ -20,6 +20,7 @@ import pandas as pd
 
 from src.backtest.strategy import SignalStrategy
 from src.utils.env import get_logs_dir, get_reports_dir
+from src.utils.notify import notify
 
 FEE_RATE = 0.006
 SLIPPAGE = 0.0005
@@ -138,6 +139,7 @@ def main() -> None:  # pragma: no cover - CLI entry point
         strat = SignalStrategy(args.symbol)
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.exception("Failed to load strategy: %s", exc)
+        notify(f"Failed to load strategy: {exc}")
         return
     risk = RiskManager(args.max_drawdown)
 
@@ -162,14 +164,17 @@ def main() -> None:  # pragma: no cover - CLI entry point
             df_window, last = _read_window(args.csv, args.window)
         except FileNotFoundError:
             logger.error("Market data file not found: %s", args.csv)
+            notify(f"Market data file not found: {args.csv}")
             time.sleep(args.interval_minutes * 60)
             continue
         except pd.errors.EmptyDataError:
             logger.warning("Market data file empty: %s", args.csv)
+            notify(f"Market data file empty: {args.csv}")
             time.sleep(args.interval_minutes * 60)
             continue
         except Exception as exc:  # pragma: no cover - best effort logging
             logger.exception("Failed to read market data: %s", exc)
+            notify(f"Failed to read market data: {exc}")
             time.sleep(args.interval_minutes * 60)
             continue
 
@@ -182,6 +187,7 @@ def main() -> None:  # pragma: no cover - CLI entry point
             p_up = float(strat.predict_proba_last(X))
         except Exception as exc:  # pragma: no cover - best effort logging
             logger.exception("Prediction failed: %s", exc)
+            notify(f"Prediction failed: {exc}")
             time.sleep(args.interval_minutes * 60)
             continue
         if p_up >= strat.buy_thr and (p_up - 0.5) >= strat.min_edge:
@@ -192,6 +198,19 @@ def main() -> None:  # pragma: no cover - CLI entry point
             signal = "HOLD"
 
         price = float(last["close"])
+        if signal == "BUY" and cash > 0:
+            trade_price = price * (1 + SLIPPAGE)
+            qty = (cash * (1 - FEE_RATE)) / trade_price
+            asset_qty += qty
+            cash = 0.0
+            notify(f"BUY {qty:.6f} {args.symbol} at {trade_price:.2f}")
+        elif signal == "SELL" and asset_qty > 0:
+            trade_price = price * (1 - SLIPPAGE)
+            proceeds = asset_qty * trade_price * (1 - FEE_RATE)
+            notify(f"SELL {asset_qty:.6f} {args.symbol} at {trade_price:.2f}")
+            cash += proceeds
+            asset_qty = 0.0
+
 
         if args.mode == "live":
             try:
@@ -200,6 +219,7 @@ def main() -> None:  # pragma: no cover - CLI entry point
                 logger.exception("Failed to fetch balances: %s", exc)
                 time.sleep(args.interval_minutes * 60)
                 continue
+
 
         equity = cash + asset_qty * price
 
@@ -263,10 +283,23 @@ def main() -> None:  # pragma: no cover - CLI entry point
             snapshot.to_csv(report_path, mode="a", header=write_header, index=False)
         except OSError as exc:  # pragma: no cover - best effort logging
             logger.exception("Failed to write snapshot: %s", exc)
+            notify(f"Failed to write snapshot: {exc}")
         else:
             write_header = False
 
         now = pd.Timestamp.utcnow()
+        if last_day is None or now.date() != last_day:
+            daily_high = equity
+            last_day = now.date()
+        daily_high = max(daily_high, equity)
+        if equity < daily_high * (1 - 0.02):
+            msg = "Daily drawdown exceeded 2%, pausing 24h"
+            logger.warning(msg)
+            notify(msg)
+            time.sleep(24 * 60 * 60)
+            daily_high = equity
+            last_day = pd.Timestamp.utcnow().date()
+
         if not risk.check(equity, now):
             break
 

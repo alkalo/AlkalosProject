@@ -46,6 +46,9 @@ def backtest_spot(
     position = 0.0
     equity_curve = []
     trades: TradeList = []
+    # Track entry prices to compute PnL per round-trip
+    entry_prices: List[float] = []
+    trade_pnls: List[float] = []
 
     for ts, row in df.iterrows():
         price = float(row["close"])
@@ -55,15 +58,38 @@ def backtest_spot(
             qty = 1.0
             cash -= price * (1 + fee)
             position += qty
+            entry_prices.append(price)
             trades.append(Trade(ts, "BUY", price, qty))
         elif signal == "SELL" and position >= 1.0:
-            cash += price * (1 - fee) * 1.0
+            cash += price * (1 - fee)
+            entry_price = entry_prices.pop(0) if entry_prices else price
+            trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
             trades.append(Trade(ts, "SELL", price, 1.0))
             position -= 1.0
 
         equity_curve.append(cash + position * price)
 
-    summary = {"final_equity": equity_curve[-1] if equity_curve else initial_cash}
     equity = pd.Series(equity_curve, index=df.index, name="equity")
+    final_equity = equity.iloc[-1] if not equity.empty else initial_cash
+    pnl = final_equity - initial_cash
+    return_pct = pnl / initial_cash if initial_cash else 0.0
+    max_drawdown = float((equity.cummax() - equity).max()) if not equity.empty else 0.0
+    total_trades = len(trades)
+    if trade_pnls:
+        win_rate = sum(p > 0 for p in trade_pnls) / len(trade_pnls)
+        avg_trade = float(sum(trade_pnls) / len(trade_pnls))
+    else:
+        win_rate = 0.0
+        avg_trade = 0.0
+
+    summary = {
+        "final_equity": final_equity,
+        "pnl": pnl,
+        "return_pct": return_pct,
+        "max_drawdown": max_drawdown,
+        "total_trades": total_trades,
+        "win_rate": win_rate,
+        "avg_trade": avg_trade,
+    }
     trades_df = pd.DataFrame(trades)
     return summary, equity, trades_df

@@ -1,11 +1,60 @@
 # AlkalosProject
 
-This project demonstrates training a simple model and saving its features using `joblib`.
+Este proyecto demuestra un flujo básico de descarga de datos, entrenamiento de
+un modelo y generación de señales para backtesting y paper trading.
 
-The training script saves two files in the specified model directory:
+## Requisitos y setup (Windows)
 
-- `model.pkl` – the trained model.
-- `features.pkl` – the features used to train the model.
+1. Instalar [Python 3.10+](https://www.python.org/downloads/windows/).
+2. Clonar el repositorio y crear un entorno virtual:
+   ```powershell
+   git clone <url>
+   cd AlkalosProject
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
 
-`SignalStrategy` loads `features.pkl` with `joblib.load`.
+## Flujo de trabajo
+
+1. **Fetch** – Descargar datos OHLCV:
+   ```powershell
+   python -m src.data_fetch --source yf --symbols BTC --fiat USD --days 365
+   ```
+2. **Train** – Entrenar y guardar artefactos:
+   ```powershell
+   python -m src.ml.train_cli --csv data/BTC_USD_1d.csv --symbol BTC --model lgbm
+   ```
+3. **Backtest** – Ejecutar el backtest:
+   ```powershell
+   python -m src.backtest.run_backtest --symbol BTC --csv data/BTC_USD_1d.csv
+   ```
+4. **Paper** – Lanzar el bot de paper trading:
+   ```powershell
+   python -m src.live.paper_bot --symbol BTC --csv data/BTC_USD_1d.csv
+   ```
+
+## Artefactos y reportes
+
+- **Datos**: `data/{symbol}_{fiat}_1d.csv`
+- **Modelos**: `models/<symbol>/` (`model.pkl`, `scaler.pkl`, `features.json`,
+  `report.json`, `diagnostic.png`)
+- **Backtests**: `reports/{symbol}_summary.json`,
+  `reports/{symbol}_equity.png`, `reports/{symbol}_trades.csv`
+- **Paper bot**: `reports/paper_bot_{symbol}.csv`
+- **Logs**: `logs/data_fetch.log`, `logs/paper_bot.log`
+
+## Ajustar fees y umbrales
+
+- **Backtest**: parámetros `--fee`, `--slippage`, `--buy-thr`, `--sell-thr` y
+  `--min-edge` de `src/backtest/run_backtest.py`.
+- **Paper bot**: constantes `FEE_RATE` y `SLIPPAGE`, y valores `buy_thr`,
+  `sell_thr` y `min_edge` al instanciar `SignalStrategy` en
+  `src/live/paper_bot.py`.
+
+## Descargo de responsabilidad
+
+Este código se proporciona solo con fines educativos. No constituye asesoría
+financiera ni una recomendación de inversión. Use los scripts bajo su propia
+responsabilidad.
 

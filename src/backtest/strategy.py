@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Any
 
 import joblib
 import numpy as np
@@ -21,6 +21,7 @@ class SignalStrategy:
 
     def __init__(
         self,
+
         symbol_or_model,
         model_dir: str = "models",
         *,
@@ -31,6 +32,7 @@ class SignalStrategy:
         self.buy_thr = buy_thr
         self.sell_thr = sell_thr
         self.min_edge = min_edge
+
 
         if isinstance(symbol_or_model, str):
             symbol = symbol_or_model
@@ -45,14 +47,16 @@ class SignalStrategy:
             # treatment of input shapes.
             self.is_lstm = (base / "model.h5").exists()
         else:
+
             # Direct model instance supplied (used in unit tests)
             self.symbol = ""
             self.model = symbol_or_model
+
             self.scaler = None
             self.feature_names = []
             self.is_lstm = False
 
-    def _predict_proba_last(self, X: np.ndarray) -> float:
+    def predict_proba_last(self, X: np.ndarray) -> float:
         """Return probability of the positive class for the last sample."""
         proba = self.model.predict_proba(X)
         proba = np.asarray(proba)
@@ -75,7 +79,7 @@ class SignalStrategy:
             X = self.scaler.transform(X)
         if self.is_lstm:
             X = X.reshape(1, X.shape[0], X.shape[1])
-        proba = self._predict_proba_last(X)
+        proba = self.predict_proba_last(X)
         if proba >= self.buy_thr and (proba - 0.5) >= self.min_edge:
             return "BUY"
         if proba <= self.sell_thr and (0.5 - proba) >= self.min_edge:

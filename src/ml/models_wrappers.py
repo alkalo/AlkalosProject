@@ -1,5 +1,6 @@
 import numpy as np
 
+# Usado por tests/test_predict_proba.py
 
 class KerasLSTMClassifier:
     """Wrapper around a Keras model providing scikit-learn style predict_proba."""

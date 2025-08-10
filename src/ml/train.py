@@ -15,6 +15,22 @@ from pathlib import Path
 from typing import Sequence, Any
 
 import joblib
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_dirs(path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+_ensure_dirs("logs/train.log")
+logging.basicConfig(
+    filename="logs/train.log",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 class _IdentityScaler:
@@ -68,28 +84,46 @@ def train(
     artefact_dir = Path(model_dir) / symbol
     artefact_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Saving artefacts for %s", symbol)
+
     if model is None:
         model = {"weights": [0.1, 0.2, 0.3]}
-    joblib.dump(model, artefact_dir / "model.pkl")
+    try:
+        joblib.dump(model, artefact_dir / "model.pkl")
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to save model.pkl: %s", exc)
+        raise
 
     if is_lstm:
         # The actual LSTM weights would live in this file.  For test purposes we
         # merely create an empty placeholder so that the strategy can detect the
         # model type.
-        (artefact_dir / "model.h5").write_bytes(b"")
+        try:
+            (artefact_dir / "model.h5").write_bytes(b"")
+        except OSError as exc:  # pragma: no cover - best effort logging
+            logger.exception("Failed to write model.h5: %s", exc)
+            raise
 
     if scaler is None:
         scaler = _IdentityScaler()
-    joblib.dump(scaler, artefact_dir / "scaler.pkl")
+    try:
+        joblib.dump(scaler, artefact_dir / "scaler.pkl")
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to save scaler.pkl: %s", exc)
+        raise
 
-    with open(artefact_dir / "features.json", "w", encoding="utf-8") as fh:
-        json.dump(list(feature_names), fh)
+    try:
+        with open(artefact_dir / "features.json", "w", encoding="utf-8") as fh:
+            json.dump(list(feature_names), fh)
+        with open(artefact_dir / "report.json", "w", encoding="utf-8") as fh:
+            json.dump(report or {}, fh)
+        with open(artefact_dir / "diagnostic.png", "wb") as fh:
+            fh.write(diagnostic or b"")
+    except OSError as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to write artefact files: %s", exc)
+        raise
 
-    with open(artefact_dir / "report.json", "w", encoding="utf-8") as fh:
-        json.dump(report or {}, fh)
-
-    with open(artefact_dir / "diagnostic.png", "wb") as fh:
-        fh.write(diagnostic or b"")
+    logger.info("Artefacts stored in %s", artefact_dir)
 
 
 def train_evaluate(
@@ -120,8 +154,19 @@ def train_evaluate(
     from sklearn.model_selection import train_test_split
     import matplotlib.pyplot as plt
 
-    df = pd.read_csv(csv_path)
+    logger.info("Training %s model for %s", model_type, symbol)
+
+    try:
+        df = pd.read_csv(csv_path)
+    except FileNotFoundError as exc:  # pragma: no cover - best effort logging
+        logger.error("CSV file not found: %s", csv_path)
+        raise
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to read %s: %s", csv_path, exc)
+        raise
+
     if "target" not in df.columns:
+        logger.error("CSV must contain a 'target' column")
         raise ValueError("CSV must contain a 'target' column")
 
     dates = pd.to_datetime(df["date"]) if "date" in df.columns else None
@@ -180,15 +225,21 @@ def train_evaluate(
     plt.close(fig)
     diagnostic = buf.getvalue()
 
-    train(
-        symbol,
-        list(X.columns),
-        model=model,
-        model_dir=outdir,
-        is_lstm=model_type.lower() == "lstm",
-        report=report,
-        diagnostic=diagnostic,
-    )
+    try:
+        train(
+            symbol,
+            list(X.columns),
+            model=model,
+            model_dir=outdir,
+            is_lstm=model_type.lower() == "lstm",
+            report=report,
+            diagnostic=diagnostic,
+        )
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to persist artefacts: %s", exc)
+        raise
+
+    logger.info("Training complete for %s", symbol)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution helper

@@ -22,6 +22,9 @@ FEE_RATE = 0.006
 SLIPPAGE = 0.0005
 
 
+logger = logging.getLogger(__name__)
+
+
 def _parse_args() -> argparse.Namespace:
     """Build command line parser."""
 
@@ -58,10 +61,15 @@ def main() -> None:  # pragma: no cover - CLI entry point
     logging.basicConfig(
         filename="logs/paper_bot.log",
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    strat = SignalStrategy(args.symbol)
+    logger.info("Starting paper bot for %s", args.symbol)
+    try:
+        strat = SignalStrategy(args.symbol)
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.exception("Failed to load strategy: %s", exc)
+        return
     cash = 10_000.0
     asset_qty = 0.0
     equity = cash
@@ -74,14 +82,32 @@ def main() -> None:  # pragma: no cover - CLI entry point
     last_day = None
 
     while True:
-        df_window, last = _read_window(args.csv, args.window)
+        try:
+            df_window, last = _read_window(args.csv, args.window)
+        except FileNotFoundError:
+            logger.error("Market data file not found: %s", args.csv)
+            time.sleep(args.interval_minutes * 60)
+            continue
+        except pd.errors.EmptyDataError:
+            logger.warning("Market data file empty: %s", args.csv)
+            time.sleep(args.interval_minutes * 60)
+            continue
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.exception("Failed to read market data: %s", exc)
+            time.sleep(args.interval_minutes * 60)
+            continue
 
-        X = df_window[strat.feature_names].values
-        if strat.scaler is not None:
-            X = strat.scaler.transform(X)
-        if strat.is_lstm:
-            X = X.reshape(1, X.shape[0], X.shape[1])
-        p_up = float(strat.predict_proba_last(X))
+        try:
+            X = df_window[strat.feature_names].values
+            if strat.scaler is not None:
+                X = strat.scaler.transform(X)
+            if strat.is_lstm:
+                X = X.reshape(1, X.shape[0], X.shape[1])
+            p_up = float(strat.predict_proba_last(X))
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.exception("Prediction failed: %s", exc)
+            time.sleep(args.interval_minutes * 60)
+            continue
         if p_up >= strat.buy_thr and (p_up - 0.5) >= strat.min_edge:
             signal = "BUY"
         elif p_up <= strat.sell_thr and (0.5 - p_up) >= strat.min_edge:
@@ -103,7 +129,7 @@ def main() -> None:  # pragma: no cover - CLI entry point
 
         equity = cash + asset_qty * price
 
-        logging.info(
+        logger.info(
             "price=%.2f p_up=%.4f signal=%s cash=%.2f qty=%.6f equity=%.2f",
             price,
             p_up,
@@ -127,8 +153,12 @@ def main() -> None:  # pragma: no cover - CLI entry point
                 }
             ]
         )
-        snapshot.to_csv(report_path, mode="a", header=write_header, index=False)
-        write_header = False
+        try:
+            snapshot.to_csv(report_path, mode="a", header=write_header, index=False)
+        except OSError as exc:  # pragma: no cover - best effort logging
+            logger.exception("Failed to write snapshot: %s", exc)
+        else:
+            write_header = False
 
         now = pd.Timestamp.utcnow()
         if last_day is None or now.date() != last_day:
@@ -136,7 +166,7 @@ def main() -> None:  # pragma: no cover - CLI entry point
             last_day = now.date()
         daily_high = max(daily_high, equity)
         if equity < daily_high * (1 - 0.02):
-            logging.warning("Daily drawdown exceeded 2%%, pausing 24h")
+            logger.warning("Daily drawdown exceeded 2%%, pausing 24h")
             time.sleep(24 * 60 * 60)
             daily_high = equity
             last_day = pd.Timestamp.utcnow().date()

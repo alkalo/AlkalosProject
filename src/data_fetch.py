@@ -19,6 +19,9 @@ import pandas as pd
 from utils.market_data import fetch_coingecko_ohlc, fetch_yf_ohlc
 
 
+logger = logging.getLogger(__name__)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch OHLCV market data")
     parser.add_argument(
@@ -62,13 +65,13 @@ def _fetch_with_retry(func: Callable[..., pd.DataFrame], *args, **kwargs) -> pd.
     for attempt in range(retries):
         if attempt:
             wait = 2**attempt
-            logging.warning("Retrying after %.1f s", wait)
+            logger.warning("Retrying after %.1f s", wait)
             time.sleep(wait)
         time.sleep(rate_limit)
         try:
             return func(*args, **kwargs)
         except Exception as exc:  # pragma: no cover - best effort logging
-            logging.warning("Fetch failed (%s)", exc)
+            logger.warning("Fetch failed (%s)", exc)
     raise RuntimeError("Maximum retries exceeded")
 
 
@@ -79,7 +82,7 @@ def main() -> None:
     logging.basicConfig(
         filename="logs/data_fetch.log",
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
     symbols: List[str] = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -90,11 +93,11 @@ def main() -> None:
     fetch = fetchers[args.source]
 
     for symbol in symbols:
-        logging.info("Fetching %s from %s", symbol, args.source)
+        logger.info("Fetching %s from %s", symbol, args.source)
         try:
             df = _fetch_with_retry(fetch, symbol, args.fiat, args.days)
         except Exception as exc:  # pragma: no cover - best effort logging
-            logging.error("Failed to fetch %s: %s", symbol, exc)
+            logger.error("Failed to fetch %s: %s", symbol, exc)
             continue
 
         # Ensure expected schema
@@ -104,8 +107,12 @@ def main() -> None:
 
         outfile = args.outfile.format(symbol=symbol, fiat=args.fiat.upper())
         _ensure_dirs(outfile)
-        df.to_csv(outfile)
-        logging.info("Saved %s rows to %s", len(df), outfile)
+        try:
+            df.to_csv(outfile)
+        except OSError as exc:
+            logger.exception("Failed to write %s: %s", outfile, exc)
+        else:
+            logger.info("Saved %s rows to %s", len(df), outfile)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

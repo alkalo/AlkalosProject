@@ -19,6 +19,11 @@ class SignalStrategy:
     The class normally expects a ``symbol`` string and loads the
     corresponding model artefacts from ``model_dir``.  For testing purposes
     a model instance can be supplied directly as the first argument.
+
+    ``buy_thr`` must be strictly greater than ``sell_thr`` to provide
+    hysteresis, avoiding rapid flip-flopping between buy and sell signals.
+    ``min_edge`` represents the minimum edge over 0.5 required to act and
+    must at least cover ``costs`` (e.g. fees and slippage).
     """
 
     def __init__(
@@ -30,10 +35,17 @@ class SignalStrategy:
         buy_thr: float = 0.6,
         sell_thr: float = 0.4,
         min_edge: float = 0.02,
+        costs: float = 0.0,
     ) -> None:
+        if buy_thr <= sell_thr:
+            raise ValueError("buy_thr must be greater than sell_thr for hysteresis")
+        if min_edge < costs:
+            raise ValueError("min_edge must be greater or equal to costs")
+
         self.buy_thr = buy_thr
         self.sell_thr = sell_thr
         self.min_edge = min_edge
+        self.costs = costs
 
 
         if isinstance(symbol_or_model, str):

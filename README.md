@@ -46,7 +46,7 @@ un modelo y generación de señales para backtesting y paper trading.
 - **Backtests**: `reports/{symbol}_summary.json`,
   `reports/{symbol}_equity.png`, `reports/{symbol}_trades.csv`
 - **Bot de trading**: `reports/paper_bot_{symbol}.csv`
-- **Logs**: `logs/data_fetch.log`, `logs/paper_bot.log`
+- **Logs**: `logs/*.log` (rotados automáticamente)
 
 ## Ajustar fees y umbrales
 

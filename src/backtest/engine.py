@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 
 
@@ -25,9 +26,9 @@ def backtest_spot(
     df: pd.DataFrame,
     *,
     fee: float = 0.0,
-    slippage: float = 0.0,  # pragma: no cover - reserved for future use
+    slippage: float = 0.0,
     initial_cash: float = 1000.0,
-    risk_per_trade: float = 1.0,
+    position_pct: float = 1.0,
     stop_loss: float | None = None,
 ) -> Tuple[dict, pd.Series, pd.DataFrame]:
     """Run a tiny spot backtest driven by ``signal`` column.
@@ -39,11 +40,11 @@ def backtest_spot(
     fee:
         Proportional trading fee applied on both entry and exit.
     slippage:
-        Currently unused but kept for API compatibility.
+        Proportional slippage applied to the execution price.
     initial_cash:
         Starting cash for the backtest.
-    risk_per_trade:
-        Fraction of available cash to deploy on each trade.
+    position_pct:
+        Fraction of available equity to deploy on each trade.
     stop_loss:
         Optional stop loss expressed as a decimal percentage from entry price.
     """
@@ -52,7 +53,7 @@ def backtest_spot(
     position = 0.0
     equity_curve: list[float] = []
     trades: TradeList = []
-    trade_pnls: List[float] = []
+    trade_returns: List[float] = []
 
     entry_price: float | None = None
 
@@ -63,23 +64,30 @@ def backtest_spot(
         # Check stop loss first
         if position > 0 and stop_loss is not None and entry_price is not None:
             if price <= entry_price * (1 - stop_loss):
+
                 cash += position * price * (1 - fee)
-                trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
+                trade_returns.append(
+                    price * (1 - fee) / (entry_price * (1 + fee)) - 1
+                )
                 trades.append(Trade(ts, "SELL", price, position))
                 position = 0.0
                 entry_price = None
 
         if signal == "BUY" and cash >= price * (1 + fee) and position == 0.0:
-            qty = cash * risk_per_trade / (price * (1 + fee))
+            qty = cash * position_pct / (price * (1 + fee))
             cash -= qty * price * (1 + fee)
             position += qty
-            entry_price = price
-            trades.append(Trade(ts, "BUY", price, qty))
+            entry_price = buy_price
+            trades.append(Trade(ts, "BUY", buy_price, qty))
         elif signal == "SELL" and position > 0.0:
-            cash += position * price * (1 - fee)
+            sell_price = price * (1 - slippage)
+            cash += position * sell_price * (1 - fee)
             if entry_price is None:
+
                 entry_price = price
-            trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
+            trade_returns.append(
+                price * (1 - fee) / (entry_price * (1 + fee)) - 1
+            )
             trades.append(Trade(ts, "SELL", price, position))
             position = 0.0
             entry_price = None
@@ -91,23 +99,36 @@ def backtest_spot(
     final_equity = equity.iloc[-1] if not equity.empty else initial_cash
     pnl = final_equity - initial_cash
     return_pct = pnl / initial_cash if initial_cash else 0.0
-    max_drawdown = float((equity.cummax() - equity).max()) if not equity.empty else 0.0
-    num_trades = len(trade_pnls)
-    if trade_pnls:
-        win_rate = sum(p > 0 for p in trade_pnls) / len(trade_pnls)
-        avg_trade = float(sum(trade_pnls) / len(trade_pnls))
+    # Performance metrics
+    returns = equity.pct_change().dropna()
+    sharpe = (
+        returns.mean() / returns.std() * np.sqrt(252)
+        if not returns.empty and returns.std() != 0
+        else 0.0
+    )
+    drawdown = equity / equity.cummax() - 1 if not equity.empty else pd.Series()
+    max_drawdown = -float(drawdown.min()) if not drawdown.empty else 0.0
+    years = len(equity) / 252 if len(equity) > 1 else 0
+    cagr = (final_equity / initial_cash) ** (1 / years) - 1 if years else 0.0
+
+    num_trades = len(trade_returns)
+    if trade_returns:
+        win_rate = sum(r > 0 for r in trade_returns) / len(trade_returns)
+        avg_trade_return = float(sum(trade_returns) / len(trade_returns))
     else:
         win_rate = 0.0
-        avg_trade = 0.0
+        avg_trade_return = 0.0
 
     summary = {
         "final_equity": final_equity,
         "pnl": pnl,
         "return_pct": return_pct,
+        "cagr": cagr,
         "max_drawdown": max_drawdown,
-        "num_trades": num_trades,
+        "sharpe": sharpe,
+        "trades": num_trades,
         "win_rate": win_rate,
-        "avg_trade": avg_trade,
+        "avg_trade_return": avg_trade_return,
     }
     trades_df = pd.DataFrame(trades)
     return summary, equity, trades_df

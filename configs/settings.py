@@ -12,12 +12,13 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     models_dir: Path = Path("./models")
     logs_dir: Path = Path("./logs")
+    reports_dir: Path = Path("./reports")
     symbols: List[str] = ["BTC", "ETH"]
     fiat: str = "USD"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    @field_validator("data_dir", "models_dir", "logs_dir", mode="before")
+    @field_validator("data_dir", "models_dir", "logs_dir", "reports_dir", mode="before")
     @classmethod
     def create_dir(cls, v: str) -> Path:
         path = Path(v)

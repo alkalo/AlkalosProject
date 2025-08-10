@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.backtest.strategy import SignalStrategy
 
@@ -21,3 +22,13 @@ def test_hysteresis_prevents_flip_flop():
     assert strat.generate_signal(df) == "HOLD"
     assert strat.generate_signal(df) == "HOLD"
     assert strat.generate_signal(df) == "SELL"
+
+
+def test_buy_thr_must_exceed_sell_thr():
+    with pytest.raises(ValueError):
+        SignalStrategy(SeqModel([0.5]), buy_thr=0.4, sell_thr=0.4)
+
+
+def test_min_edge_must_cover_costs():
+    with pytest.raises(ValueError):
+        SignalStrategy(SeqModel([0.5]), buy_thr=0.6, sell_thr=0.4, min_edge=0.01, costs=0.02)

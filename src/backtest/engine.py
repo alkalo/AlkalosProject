@@ -57,79 +57,53 @@ def backtest_spot(
 
     entry_cost = 0.0
     stop_price = None
+    # Track entry prices to compute PnL per round-trip
+    entry_prices: List[float] = []
+    trade_pnls: List[float] = []
+
 
     for ts, row in df.iterrows():
         price = float(row["close"])
         signal = row.get("signal", "HOLD")
 
-        # Check stop loss first
-        if position > 0 and stop_loss is not None and price <= stop_price:  # type: ignore[arg-type]
-            proceeds = position * price * (1 - fee)
-            cash += proceeds
-            profit = proceeds - entry_cost
-            trade_profits.append(profit)
-            trades.append(Trade(ts, "SELL", price, position))
-            position = 0.0
-            entry_cost = 0.0
-            stop_price = None
 
-        # Trading signals
-        if signal == "BUY" and cash > 0 and position == 0:
-            cash_to_use = cash * risk_per_trade
-            qty = cash_to_use / (price * (1 + fee))
-            if qty > 0:
-                cost = qty * price * (1 + fee)
-                cash -= cost
-                position = qty
-                entry_cost = cost
-                if stop_loss is not None:
-                    stop_price = price * (1 - stop_loss)
-                trades.append(Trade(ts, "BUY", price, qty))
-        elif signal == "SELL" and position > 0:
-            proceeds = position * price * (1 - fee)
-            cash += proceeds
-            profit = proceeds - entry_cost
-            trade_profits.append(profit)
-            trades.append(Trade(ts, "SELL", price, position))
-            position = 0.0
-            entry_cost = 0.0
-            stop_price = None
+        if signal == "BUY" and cash >= price * (1 + fee):
+            qty = 1.0
+            cash -= price * (1 + fee)
+            position += qty
+            entry_prices.append(price)
+            trades.append(Trade(ts, "BUY", price, qty))
+        elif signal == "SELL" and position >= 1.0:
+            cash += price * (1 - fee)
+            entry_price = entry_prices.pop(0) if entry_prices else price
+            trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
+            trades.append(Trade(ts, "SELL", price, 1.0))
+            position -= 1.0
 
         equity_curve.append(cash + position * price)
 
     equity = pd.Series(equity_curve, index=df.index, name="equity")
 
     final_equity = equity.iloc[-1] if not equity.empty else initial_cash
-    periods = len(equity)
-    years = periods / 252 if periods else 0
-    cagr = (final_equity / initial_cash) ** (1 / years) - 1 if years else 0.0
-
-    roll_max = equity.cummax()
-    drawdown = equity / roll_max - 1.0
-    max_dd = drawdown.min() if not drawdown.empty else 0.0
-
-    returns = equity.pct_change().dropna()
-    sharpe = (
-        returns.mean() / returns.std() * sqrt(252)
-        if not returns.empty and returns.std() != 0
-        else 0.0
-    )
-
-    num_trades = len(trade_profits)
-    win_rate = (
-        sum(p > 0 for p in trade_profits) / num_trades if num_trades else 0.0
-    )
-    avg_profit = sum(trade_profits) / num_trades if num_trades else 0.0
+    pnl = final_equity - initial_cash
+    return_pct = pnl / initial_cash if initial_cash else 0.0
+    max_drawdown = float((equity.cummax() - equity).max()) if not equity.empty else 0.0
+    total_trades = len(trades)
+    if trade_pnls:
+        win_rate = sum(p > 0 for p in trade_pnls) / len(trade_pnls)
+        avg_trade = float(sum(trade_pnls) / len(trade_pnls))
+    else:
+        win_rate = 0.0
+        avg_trade = 0.0
 
     summary = {
         "final_equity": final_equity,
-        "CAGR": cagr,
-        "max_drawdown": max_dd,
-        "sharpe": sharpe,
+        "pnl": pnl,
+        "return_pct": return_pct,
+        "max_drawdown": max_drawdown,
+        "total_trades": total_trades,
         "win_rate": win_rate,
-        "num_trades": num_trades,
-        "avg_profit_per_trade": avg_profit,
+        "avg_trade": avg_trade,
     }
-
     trades_df = pd.DataFrame(trades)
     return summary, equity, trades_df

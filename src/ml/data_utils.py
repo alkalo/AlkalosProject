@@ -8,7 +8,8 @@ realistic interface for working with time series data.
 from __future__ import annotations
 
 import pandas as pd
-from typing import Tuple
+from .feature_engineering import add_simple_returns, add_tech_indicators
+from typing import Tuple, Sequence
 
 
 def make_lagged_features(series: pd.Series, window: int) -> Tuple[pd.DataFrame, pd.Series]:
@@ -59,4 +60,36 @@ def temporal_train_test_split(
     y_test = y.iloc[split:].copy()
     return X_train, X_test, y_train, y_test
 
+def build_features(
+    df: pd.DataFrame,
+    *,
+    target_col: str = "target",
+    feature_set: str = "returns",
+) -> Tuple[pd.DataFrame, pd.Series, Sequence[str]]:
+    """Generate feature matrix and target aligned consistently.
 
+    Parameters
+    ----------
+    df:
+        Input DataFrame containing at least a ``close`` price column and a
+        target column.
+    target_col:
+        Name of the target column.
+    feature_set:
+        Either ``"returns"`` for a single simple return feature or
+        ``"indicators"`` for a richer set of technical indicators.
+    """
+    df = df.copy()
+    if feature_set == "indicators":
+        df = add_tech_indicators(df)
+        feature_cols = [
+            c for c in df.columns if c not in {target_col, "date", "close"}
+        ]
+    else:
+        df = add_simple_returns(df)
+        feature_cols = ["return"]
+
+    df = df.dropna(subset=feature_cols + [target_col])
+    X = df[feature_cols]
+    y = df[target_col]
+    return X, y, feature_cols

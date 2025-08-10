@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from .strategy import SignalStrategy
-from . import engine
+from src.backtest.engine import backtest_spot
 
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def main() -> None:
     df["signal"] = signals
 
     try:
-        summary, equity, trades = engine.backtest_spot(
+        summary, equity, trades = backtest_spot(
             df,
             fee=args.fee,
             slippage=args.slippage,

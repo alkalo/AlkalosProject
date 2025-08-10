@@ -56,7 +56,7 @@ def fetch_yfinance(symbol: str, fiat: str, days: int, retries: int = 2, sleep_s:
     ticker = f"{symbol.upper()}-{fiat.upper()}"
 
     last_err = None
-    for attempt in range(retries + 1):
+    for _ in range(retries + 1):
         try:
             if days <= 730:
                 period = f"{max(days,1)}d"

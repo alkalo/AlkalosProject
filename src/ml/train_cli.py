@@ -1,13 +1,14 @@
+# src/ml/train_cli.py
 import argparse
 from pathlib import Path
 import inspect
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 import pandas as pd
 import joblib
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
+from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, accuracy_score
 from lightgbm import LGBMClassifier
 
 from src.ml.data_utils import build_features
@@ -18,10 +19,11 @@ def parse_args():
     p.add_argument("--csv", required=True, help="Ruta CSV con OHLCV o con features")
     p.add_argument("--symbol", required=True)
     p.add_argument("--model", choices=["lgbm"], default="lgbm")
-    p.add_argument("--feature_set", choices=["lags", "tech"], default="lags")
+    p.add_argument("--feature_set", choices=["lags", "tech", "both"], default="lags")
     p.add_argument("--window", type=int, default=5)
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--random-state", type=int, default=42)
+    p.add_argument("--test-size", type=float, default=0.2, help="porción temporal para test (0-1)")
     return p.parse_args()
 
 def ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
@@ -45,7 +47,7 @@ def main():
     df = pd.read_csv(args.csv)
     df = ensure_datetime_index(df)
 
-    # ¿El CSV ya trae features? Heurística simple por nombres
+    # Detecta si CSV ya trae features
     feature_like = [c for c in df.columns if any(s in c.lower() for s in ["lag", "rsi", "ema", "sma", "macd"])]
     has_features = len(feature_like) > 0
 
@@ -63,13 +65,20 @@ def main():
             kwargs["horizon"] = args.horizon
         X, y, meta = build_features(df.copy(), **kwargs)
 
-    # Escalado + guardas defensivas
     if len(X) == 0:
-        raise ValueError("No hay filas válidas tras construir features. Revisa datos (close NaN) o usa un window menor.")
+        raise ValueError("No hay filas válidas tras construir features. Revisa datos o usa un window menor.")
 
+    # Split temporal 80/20 (sin shuffle)
+    n = len(X)
+    n_test = max(1, int(n * args.test_size))
+    n_train = n - n_test
+    X_train, X_test = X.iloc[:n_train], X.iloc[n_train:]
+    y_train, y_test = y.iloc[:n_train], y.iloc[n_train:]
+
+    # Escalado
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
     # Modelo
     clf = LGBMClassifier(
@@ -82,14 +91,25 @@ def main():
         random_state=args.random_state,
         n_jobs=-1,
     )
-    clf.fit(X_scaled, y)
+    clf.fit(X_train_scaled, y_train)
 
-    # Métricas (fit metrics, rápidas)
-    y_pred = clf.predict(X_scaled)
-    y_prob = clf.predict_proba(X_scaled)[:, 1]
-    report = classification_report(y, y_pred, output_dict=True, zero_division=0)
-    auc = roc_auc_score(y, y_prob)
-    cm = confusion_matrix(y, y_pred).tolist()
+    # Métricas
+    y_pred_tr = clf.predict(X_train_scaled); y_prob_tr = clf.predict_proba(X_train_scaled)[:, 1]
+    y_pred_te = clf.predict(X_test_scaled);  y_prob_te = clf.predict_proba(X_test_scaled)[:, 1]
+
+    def _metrics(y_true, y_pred, y_prob):
+        rep = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
+        auc = roc_auc_score(y_true, y_prob) if len(set(y_true)) > 1 else None
+        cm = confusion_matrix(y_true, y_pred).tolist()
+        acc = accuracy_score(y_true, y_pred)
+        return {"roc_auc": auc, "confusion_matrix": cm, "accuracy": acc, **rep}
+
+    metrics = {
+        "train": _metrics(y_train, y_pred_tr, y_prob_tr),
+        "test": _metrics(y_test, y_pred_te, y_prob_te),
+        "n_train": int(len(X_train)),
+        "n_test": int(len(X_test)),
+    }
 
     # Persistencia
     model_dir = Path("models") / args.symbol
@@ -98,17 +118,25 @@ def main():
     joblib.dump(scaler, model_dir / "scaler.pkl")
     save_features_json(model_dir / "features.json", columns=list(X.columns), meta=meta)
 
+    # Punto de corte (para backtest fuera de muestra)
+    split_info = {
+        "n_samples": int(len(X)),
+        "n_train": int(len(X_train)),
+        "n_test": int(len(X_test)),
+        "split_index_label": X.index[len(X_train)].isoformat() if hasattr(X.index, "isoformat") else str(X.index[len(X_train)]),
+    }
+
     with (model_dir / "report.json").open("w", encoding="utf-8") as f:
         json.dump(
             {
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "symbol": args.symbol,
                 "model": args.model,
-                "metrics": {"roc_auc": auc, **report, "confusion_matrix": cm},
-                "n_samples": int(len(X)),
+                "metrics": metrics,
                 "features_count": int(X.shape[1]),
                 "libs": {"lightgbm": "4.5.0", "sklearn": "1.6.1"},
                 "meta": meta,
+                "split": split_info,   # <-- NUEVO
             },
             f,
             ensure_ascii=False,
@@ -116,6 +144,7 @@ def main():
         )
 
     print(f"[OK] Guardado en: {model_dir}")
+    print(f"[INFO] Train: {len(X_train)} filas | Test: {len(X_test)} filas")
 
 if __name__ == "__main__":
     main()

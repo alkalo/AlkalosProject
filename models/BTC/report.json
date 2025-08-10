@@ -1,46 +1,87 @@
 {
-  "created_at": "2025-08-10T15:50:43.382725",
+  "created_at": "2025-08-10T16:02:54.624290+00:00",
   "symbol": "BTC",
   "model": "lgbm",
   "metrics": {
-    "roc_auc": 1.0,
-    "0": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 171.0
-    },
-    "1": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 188.0
-    },
-    "accuracy": 1.0,
-    "macro avg": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 359.0
-    },
-    "weighted avg": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1-score": 1.0,
-      "support": 359.0
-    },
-    "confusion_matrix": [
-      [
-        171,
-        0
+    "train": {
+      "roc_auc": 1.0,
+      "confusion_matrix": [
+        [
+          138,
+          0
+        ],
+        [
+          0,
+          150
+        ]
       ],
-      [
-        0,
-        188
-      ]
-    ]
+      "accuracy": 1.0,
+      "0": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 138.0
+      },
+      "1": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 150.0
+      },
+      "macro avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 288.0
+      },
+      "weighted avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 288.0
+      }
+    },
+    "test": {
+      "roc_auc": 0.5215311004784688,
+      "confusion_matrix": [
+        [
+          24,
+          9
+        ],
+        [
+          25,
+          13
+        ]
+      ],
+      "accuracy": 0.5211267605633803,
+      "0": {
+        "precision": 0.4897959183673469,
+        "recall": 0.7272727272727273,
+        "f1-score": 0.5853658536585366,
+        "support": 33.0
+      },
+      "1": {
+        "precision": 0.5909090909090909,
+        "recall": 0.34210526315789475,
+        "f1-score": 0.43333333333333335,
+        "support": 38.0
+      },
+      "macro avg": {
+        "precision": 0.5403525046382189,
+        "recall": 0.534688995215311,
+        "f1-score": 0.5093495934959349,
+        "support": 71.0
+      },
+      "weighted avg": {
+        "precision": 0.543912827615041,
+        "recall": 0.5211267605633803,
+        "f1-score": 0.5039963357380053,
+        "support": 71.0
+      }
+    },
+    "n_train": 288,
+    "n_test": 71
   },
-  "n_samples": 359,
   "features_count": 11,
   "libs": {
     "lightgbm": "4.5.0",
@@ -51,5 +92,11 @@
     "window": 5,
     "horizon": 1,
     "target_col": "target"
+  },
+  "split": {
+    "n_samples": 359,
+    "n_train": 288,
+    "n_test": 71,
+    "split_index_label": "2025-05-31 00:00:00+00:00"
   }
 }

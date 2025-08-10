@@ -26,6 +26,7 @@ def parse_args():
     p.add_argument("--buy-thr", type=float, default=0.6)
     p.add_argument("--sell-thr", type=float, default=0.4)
     p.add_argument("--min-edge", type=float, default=0.0)
+    p.add_argument("--scope", choices=["test", "full"], default="test", help="Periodo a backtestear")
     return p.parse_args()
 
 
@@ -45,12 +46,15 @@ def load_model_bundle(symbol: str):
     clf = joblib.load(model_dir / "model.pkl")
     scaler = joblib.load(model_dir / "scaler.pkl")
     fjson = load_features_json(model_dir / "features.json")
-    return clf, scaler, fjson, model_dir
+    # cargamos report.json para obtener n_train
+    with (model_dir / "report.json").open("r", encoding="utf-8") as f:
+        report = json.load(f)
+    n_train = int(report.get("split", {}).get("n_train", 0))
+    return clf, scaler, fjson, model_dir, n_train
 
 
 def ensure_features(df_raw: pd.DataFrame, fjson: dict) -> pd.DataFrame:
     cols = fjson["columns"]
-    # Si ya están presentes, reordenar y listo
     if set(cols).issubset(set(df_raw.columns)):
         return df_raw.loc[:, cols].copy()
 
@@ -58,7 +62,6 @@ def ensure_features(df_raw: pd.DataFrame, fjson: dict) -> pd.DataFrame:
     window = int(fjson.get("window", 5))
     kwargs = {"feature_set": feature_set, "window": window}
 
-    # Añadir horizon sólo si build_features lo soporta
     try:
         if "horizon" in fjson and "horizon" in inspect.signature(build_features).parameters:
             kwargs["horizon"] = int(fjson.get("horizon", 1))
@@ -95,7 +98,6 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
                 position = 1
                 entry = price
                 trades.append({"datetime": dt.isoformat(), "side": "BUY", "price": price, "equity": cash})
-
             elif prob <= args.sell_thr and position >= 0:
                 if position == 1 and entry is not None:
                     pnl = (price - entry) / entry
@@ -106,7 +108,6 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
                 entry = price
                 trades.append({"datetime": dt.isoformat(), "side": "SELL", "price": price, "equity": cash})
 
-        # Mark-to-market simple
         if position == 1 and entry is not None:
             mtm = (price - entry) / entry
             equity.append(cash * (1 + mtm))
@@ -116,7 +117,6 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
         else:
             equity.append(cash)
 
-    # Cierre al final
     if position != 0 and entry is not None:
         final_price = float(prices.iloc[-1])
         pnl = (final_price - entry) / entry if position == 1 else (entry - final_price) / entry
@@ -135,7 +135,7 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
             "buy_thr": args.buy_thr, "sell_thr": args.sell_thr, "min_edge": args.min_edge,
             "fee": args.fee, "slippage": args.slippage,
         },
-        "created_at": datetime.now(timezone.utc).isoformat(),  # UTC aware, sin warning
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     return pd.Series(equity, index=prices.index, name="equity"), trades, summary
 
@@ -144,50 +144,45 @@ def main():
     args = parse_args()
     df = pd.read_csv(args.csv)
     df = ensure_datetime_index(df)
-
     if "close" not in df.columns:
         raise ValueError("El CSV debe contener 'close'.")
 
-    clf, scaler, fjson, _ = load_model_bundle(args.symbol)
+    clf, scaler, fjson, _, n_train = load_model_bundle(args.symbol)
     X = ensure_features(df.copy(), fjson)
     X_scaled = pd.DataFrame(scaler.transform(X), index=X.index, columns=X.columns)
 
-    # Probabilidades del modelo
-    probs = clf.predict_proba(X_scaled)[:, 1]
+    probs_all = clf.predict_proba(X_scaled)[:, 1]
+    prices_all = df["close"].astype(float).reindex(X.index)
 
-    # Alinear precios con las filas de features (misma longitud/índice)
-    prices = df["close"].astype(float).reindex(X.index)
+    mask = prices_all.notna()
+    prices_all = prices_all[mask]
+    probs_all = probs_all[mask.values]
 
-    # Limpiar NaNs por si acaso
-    mask = prices.notna()
-    prices = prices[mask]
-    probs = probs[mask.values]  # Serie -> vector booleano
+    if args.scope == "test" and n_train > 0 and n_train < len(prices_all):
+        prices = prices_all.iloc[n_train:]
+        probs = probs_all[n_train:]
+    else:
+        prices = prices_all
+        probs = probs_all
 
-    # Ejecutar backtest
     eq, trades, summary = simulate_backtest(prices, probs, args)
 
-    # Guardar resultados (sin with_suffix)
-    reports_dir = Path("reports")
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    base_name = args.symbol
+    reports_dir = Path("reports"); reports_dir.mkdir(parents=True, exist_ok=True)
+    base = args.symbol + ("_test" if args.scope == "test" else "")
 
-    # Equity
     plt.figure()
     eq.plot()
-    plt.title(f"Equity Curve - {args.symbol}")
-    plt.xlabel("Time")
-    plt.ylabel("Equity")
+    plt.title(f"Equity Curve - {args.symbol} ({args.scope})")
+    plt.xlabel("Time"); plt.ylabel("Equity")
     plt.tight_layout()
-    plt.savefig(reports_dir / f"{base_name}_equity.png")
+    plt.savefig(reports_dir / f"{base}_equity.png")
 
-    # Trades CSV
-    pd.DataFrame(trades).to_csv(reports_dir / f"{base_name}_trades.csv", index=False)
+    pd.DataFrame(trades).to_csv(reports_dir / f"{base}_trades.csv", index=False)
 
-    # Summary JSON
-    with (reports_dir / f"{base_name}_summary.json").open("w", encoding="utf-8") as f:
+    with (reports_dir / f"{base}_summary.json").open("w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
-    print(f"[OK] backtest listo en /reports para {args.symbol}")
+    print(f"[OK] backtest ({args.scope}) listo en /reports para {args.symbol}")
 
 
 if __name__ == "__main__":

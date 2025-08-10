@@ -1,9 +1,8 @@
+# src/ml/data_utils.py
 from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Tuple, Dict, Any, List
-
-# ============= utilidades =============
 
 def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["timestamp", "date", "Datetime", "Date"]:
@@ -16,13 +15,11 @@ def _ensure_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_index()
 
 def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
-    # estandariza nombres y castea a float
     df = df.copy()
     df.columns = [c.lower() for c in df.columns]
     for c in ["open", "high", "low", "close", "volume"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-    # elimina filas sin 'close'
     df = df.dropna(subset=["close"])
     return df
 
@@ -38,8 +35,6 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = roll_up / roll_down.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return rsi
-
-# ============= features =============
 
 def _build_lag_features(df: pd.DataFrame, window: int) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
@@ -73,8 +68,6 @@ def _build_tech_features(df: pd.DataFrame, window: int) -> pd.DataFrame:
         out[f"roc_{k}"] = close.pct_change(k)
     return out
 
-# ============= función principal =============
-
 def build_features(
     df: pd.DataFrame,
     feature_set: str = "lags",
@@ -92,12 +85,10 @@ def build_features(
     if "close" not in df.columns:
         raise ValueError("Se requiere columna 'close' para construir features.")
 
-    # target binario
     h = max(int(horizon), 1)
     future = df["close"].shift(-h)
     df[target_col] = (future > df["close"]).astype("Int64")
 
-    # features
     fs = (feature_set or "lags").lower()
     if fs not in {"lags", "tech", "both"}:
         fs = "lags"
@@ -110,41 +101,20 @@ def build_features(
         feats.append(_build_tech_features(df, w))
     X = pd.concat(feats, axis=1)
 
-    # recorta últimas h filas (no hay etiqueta) y elimina NaNs iniciales por indicadores
     valid_len = len(df) - h
     if valid_len < 1:
-        # demasiado corto; intenta fallback de ventana
-        w2 = max(1, min(3, len(df) // 4))
-        feats = [_build_lag_features(df, w2)]
-        X = pd.concat(feats, axis=1)
-        valid_len = len(df) - h
-        if valid_len < 1:
-            return X.iloc[0:0], pd.Series(dtype=int), {"feature_set": "lags", "window": w2, "horizon": h}
+        return X.iloc[0:0], pd.Series(dtype=int), {"feature_set": fs, "window": w, "horizon": h, "target_col": target_col}
 
     X = X.iloc[:valid_len]
     y = df[target_col].iloc[:valid_len].astype(int)
 
-    # elimina filas con NaNs (quedarán las posteriores a las ventanas)
     mask_valid = ~X.isna().any(axis=1)
     X = X.loc[mask_valid]
     y = y.loc[X.index]
 
-    # Si por alguna razón quedó vacío, fallback agresivo: sólo lags con ventana mínima
-    if len(X) == 0 and len(df) >= 10:
-        w2 = max(1, min(3, len(df) // 10))
-        X = _build_lag_features(df, w2).iloc[:valid_len]
-        mask_valid = ~X.isna().any(axis=1)
-        X = X.loc[mask_valid]
-        y = y.loc[X.index]
-        feature_set = "lags"
-        window = w2
-    else:
-        feature_set = fs
-        window = w
-
     meta: Dict[str, Any] = {
-        "feature_set": feature_set,
-        "window": int(window),
+        "feature_set": fs,
+        "window": int(w),
         "horizon": int(h),
         "target_col": target_col,
     }

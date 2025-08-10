@@ -25,7 +25,7 @@ def backtest_spot(
     df: pd.DataFrame,
     *,
     fee: float = 0.0,
-    slippage: float = 0.0,  # pragma: no cover - reserved for future use
+    slippage: float = 0.0,
     initial_cash: float = 1000.0,
     risk_per_trade: float = 1.0,
     stop_loss: float | None = None,
@@ -39,7 +39,7 @@ def backtest_spot(
     fee:
         Proportional trading fee applied on both entry and exit.
     slippage:
-        Currently unused but kept for API compatibility.
+        Proportional slippage applied to the execution price.
     initial_cash:
         Starting cash for the backtest.
     risk_per_trade:
@@ -63,24 +63,31 @@ def backtest_spot(
         # Check stop loss first
         if position > 0 and stop_loss is not None and entry_price is not None:
             if price <= entry_price * (1 - stop_loss):
-                cash += position * price * (1 - fee)
-                trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
-                trades.append(Trade(ts, "SELL", price, position))
+                sell_price = price * (1 - slippage)
+                cash += position * sell_price * (1 - fee)
+                trade_pnls.append(sell_price * (1 - fee) - entry_price * (1 + fee))
+                trades.append(Trade(ts, "SELL", sell_price, position))
                 position = 0.0
                 entry_price = None
 
-        if signal == "BUY" and cash >= price * (1 + fee) and position == 0.0:
-            qty = cash * risk_per_trade / (price * (1 + fee))
-            cash -= qty * price * (1 + fee)
+        if (
+            signal == "BUY"
+            and cash >= price * (1 + slippage) * (1 + fee)
+            and position == 0.0
+        ):
+            buy_price = price * (1 + slippage)
+            qty = cash * risk_per_trade / (buy_price * (1 + fee))
+            cash -= qty * buy_price * (1 + fee)
             position += qty
-            entry_price = price
-            trades.append(Trade(ts, "BUY", price, qty))
+            entry_price = buy_price
+            trades.append(Trade(ts, "BUY", buy_price, qty))
         elif signal == "SELL" and position > 0.0:
-            cash += position * price * (1 - fee)
+            sell_price = price * (1 - slippage)
+            cash += position * sell_price * (1 - fee)
             if entry_price is None:
-                entry_price = price
-            trade_pnls.append(price * (1 - fee) - entry_price * (1 + fee))
-            trades.append(Trade(ts, "SELL", price, position))
+                entry_price = sell_price
+            trade_pnls.append(sell_price * (1 - fee) - entry_price * (1 + fee))
+            trades.append(Trade(ts, "SELL", sell_price, position))
             position = 0.0
             entry_price = None
 

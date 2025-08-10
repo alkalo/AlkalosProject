@@ -44,3 +44,20 @@ def test_stop_loss_triggered():
     qty = 1000 / (10 * (1 + 0.01))
     expected_final = qty * 9 * (1 - 0.01)
     assert summary["final_equity"] == pytest.approx(expected_final)
+
+
+def test_slippage_affects_final_equity():
+    df = pd.DataFrame({
+        "close": [100, 110],
+        "signal": ["BUY", "SELL"],
+    })
+    summary_no_slip, _, _ = backtest_spot(
+        df, fee=0.0, slippage=0.0, initial_cash=1000
+    )
+    summary_slip, _, _ = backtest_spot(
+        df, fee=0.0, slippage=0.01, initial_cash=1000
+    )
+    assert summary_no_slip["final_equity"] == pytest.approx(1100.0)
+    expected_with_slip = 1000 / (100 * 1.01) * 110 * (1 - 0.01)
+    assert summary_slip["final_equity"] == pytest.approx(expected_with_slip)
+    assert summary_slip["final_equity"] < summary_no_slip["final_equity"]

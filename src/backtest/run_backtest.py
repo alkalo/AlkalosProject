@@ -27,11 +27,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sell-thr", dest="sell_thr", type=float, default=0.4, help="Sell probability threshold")
     parser.add_argument("--min-edge", dest="min_edge", type=float, default=0.02, help="Minimum edge over 0.5 to trigger a trade")
     parser.add_argument("--initial-cash", dest="initial_cash", type=float, default=1000.0, help="Initial cash for the backtest")
+    parser.add_argument(
+        "--window-size",
+        dest="window_size",
+        type=int,
+        default=0,
+        help="Window size for signal generation (0 uses full history)",
+    )
+    parser.add_argument(
+        "--config",
+        dest="config",
+        help="Path to JSON config file specifying thresholds and window size",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Override CLI options with values from configuration file if provided
+    if args.config:
+        try:
+            with open(args.config, "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.error("Failed to load config file %s: %s", args.config, exc)
+            return
+        args.buy_thr = cfg.get("buy_thr", args.buy_thr)
+        args.sell_thr = cfg.get("sell_thr", args.sell_thr)
+        args.min_edge = cfg.get("min_edge", args.min_edge)
+        args.window_size = cfg.get("window", cfg.get("window_size", args.window_size))
 
     _ensure_dirs(str(get_logs_dir() / "run_backtest.log"))
     logging.basicConfig(
@@ -64,8 +89,13 @@ def main() -> None:
 
     logger.info("Generating signals")
     signals = []
+    window_size = args.window_size
     for i in range(len(df)):
-        window = df.iloc[: i + 1]
+        if window_size and window_size > 0:
+            start = max(0, i + 1 - window_size)
+            window = df.iloc[start : i + 1]
+        else:
+            window = df.iloc[: i + 1]
         try:
             signals.append(strategy.generate_signal(window))
         except Exception as exc:  # pragma: no cover - best effort logging
@@ -93,8 +123,12 @@ def main() -> None:
 
     logger.info("Writing reports to %s", reports_dir)
     try:
+        # Ensure all summary values are JSON serialisable
+        serialisable_summary = {
+            k: (float(v) if hasattr(v, "__float__") else v) for k, v in summary.items()
+        }
         with open(summary_path, "w", encoding="utf-8") as fh:
-            json.dump(summary, fh, indent=2)
+            json.dump(serialisable_summary, fh, indent=2)
         trades.to_csv(trades_path, index=False)
 
         import matplotlib.pyplot as plt

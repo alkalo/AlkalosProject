@@ -26,7 +26,7 @@ def backtest_spot(
     df: pd.DataFrame,
     *,
     fee: float = 0.0,
-    slippage: float = 0.0,  # pragma: no cover - reserved for future use
+    slippage: float = 0.0,
     initial_cash: float = 1000.0,
     position_pct: float = 1.0,
     stop_loss: float | None = None,
@@ -40,7 +40,7 @@ def backtest_spot(
     fee:
         Proportional trading fee applied on both entry and exit.
     slippage:
-        Currently unused but kept for API compatibility.
+        Proportional slippage applied to the execution price.
     initial_cash:
         Starting cash for the backtest.
     position_pct:
@@ -64,6 +64,7 @@ def backtest_spot(
         # Check stop loss first
         if position > 0 and stop_loss is not None and entry_price is not None:
             if price <= entry_price * (1 - stop_loss):
+
                 cash += position * price * (1 - fee)
                 trade_returns.append(
                     price * (1 - fee) / (entry_price * (1 + fee)) - 1
@@ -76,11 +77,13 @@ def backtest_spot(
             qty = cash * position_pct / (price * (1 + fee))
             cash -= qty * price * (1 + fee)
             position += qty
-            entry_price = price
-            trades.append(Trade(ts, "BUY", price, qty))
+            entry_price = buy_price
+            trades.append(Trade(ts, "BUY", buy_price, qty))
         elif signal == "SELL" and position > 0.0:
-            cash += position * price * (1 - fee)
+            sell_price = price * (1 - slippage)
+            cash += position * sell_price * (1 - fee)
             if entry_price is None:
+
                 entry_price = price
             trade_returns.append(
                 price * (1 - fee) / (entry_price * (1 + fee)) - 1

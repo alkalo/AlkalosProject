@@ -1,7 +1,7 @@
 # PowerShell script to run a full BTC workflow for sanity checking.
 
 # Step 1: environment setup
-$venv = ".venv\Scripts\Activate.ps1"
+$venv = ".venv\\Scripts\\Activate.ps1"
 Write-Host "Setting up environment..." -ForegroundColor Cyan
 if (-Not (Test-Path ".venv")) {
     python -m venv .venv
@@ -23,7 +23,13 @@ python src\ml\train_cli.py --model lgbm --csv data/BTC_USD_1d.csv --symbol BTC -
 Write-Host "Running BTC backtest..." -ForegroundColor Cyan
 python src\backtest\run_backtest.py --symbol BTC --csv data/BTC_USD_1d.csv --fee 0.006
 
-# Step 5: print summary path and total return
+# Step 5: short paper trading demo
+Write-Host "Launching paper bot demo..." -ForegroundColor Cyan
+$bot = Start-Process -FilePath "python" -ArgumentList "src\\live\\paper_bot.py --symbol BTC --csv data/BTC_USD_1d.csv --interval-minutes 1" -PassThru
+Start-Sleep -Seconds 5
+Stop-Process -Id $bot.Id
+
+# Step 6: print summary path and total return
 $summaryPath = Join-Path (Resolve-Path ".") "reports/BTC_summary.json"
 if (Test-Path $summaryPath) {
     $summary = Get-Content $summaryPath | ConvertFrom-Json
@@ -35,3 +41,4 @@ if (Test-Path $summaryPath) {
     Write-Host "Summary file not found: $summaryPath" -ForegroundColor Red
     exit 1
 }
+

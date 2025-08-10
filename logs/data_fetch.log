@@ -20,3 +20,15 @@
 1 Failed download:
 2025-08-10 17:32:20,467 ERROR yfinance: ['BTC-USD']: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')
 2025-08-10 17:32:20,473 INFO __main__: Saved 0 rows to data\BTC_USD_1d.csv
+2025-08-10 17:36:04,966 INFO __main__: Fetching BTC from yf
+2025-08-10 17:36:06,525 ERROR yfinance: Failed to get ticker 'BTC-USD' reason: Expecting value: line 1 column 1 (char 0)
+2025-08-10 17:36:06,796 ERROR yfinance: 
+1 Failed download:
+2025-08-10 17:36:06,796 ERROR yfinance: ['BTC-USD']: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')
+2025-08-10 17:36:06,801 INFO __main__: Saved 0 rows to data\BTC_USD_1d.csv
+2025-08-10 17:40:44,421 INFO __main__: Fetching BTC from yf
+2025-08-10 17:40:45,977 ERROR yfinance: Failed to get ticker 'BTC-USD' reason: Expecting value: line 1 column 1 (char 0)
+2025-08-10 17:40:46,233 ERROR yfinance: 
+1 Failed download:
+2025-08-10 17:40:46,233 ERROR yfinance: ['BTC-USD']: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')
+2025-08-10 17:40:46,236 INFO __main__: Saved 0 rows to data\BTC_USD_1d.csv

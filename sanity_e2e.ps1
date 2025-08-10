@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 Write-Host "Setting up environment..." -ForegroundColor Cyan
 
-# Asegura que Python vea el paquete 'src'
+# Si no instalaste en editable, exporta PYTHONPATH (harmless si ya lo hiciste)
 $env:PYTHONPATH = "$PWD"
 
 Write-Host "Fetching BTC data (365 days)..." -ForegroundColor Cyan

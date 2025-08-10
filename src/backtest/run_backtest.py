@@ -1,10 +1,12 @@
 import argparse
 from pathlib import Path
+from datetime import datetime
+import json
+import inspect
+
 import pandas as pd
 import numpy as np
-import json
 import joblib
-from datetime import datetime
 
 from src.utils.features_io import load_features_json
 from src.ml.data_utils import build_features
@@ -43,12 +45,22 @@ def load_model_bundle(symbol: str):
 
 def ensure_features(df_raw: pd.DataFrame, fjson: dict) -> pd.DataFrame:
     cols = fjson["columns"]
+    # Si ya están presentes, reordenar y listo
     if set(cols).issubset(set(df_raw.columns)):
         return df_raw.loc[:, cols].copy()
+
     feature_set = fjson.get("feature_set", "lags")
     window = int(fjson.get("window", 5))
-    horizon = int(fjson.get("horizon", 1))
-    X, _, _ = build_features(df_raw.copy(), feature_set=feature_set, window=window, horizon=horizon)
+    kwargs = {"feature_set": feature_set, "window": window}
+
+    # Añadir horizon sólo si build_features lo soporta
+    try:
+        if "horizon" in fjson and "horizon" in inspect.signature(build_features).parameters:
+            kwargs["horizon"] = int(fjson.get("horizon", 1))
+    except Exception:
+        pass
+
+    X, *_ = build_features(df_raw.copy(), **kwargs)
     missing = [c for c in cols if c not in X.columns]
     if missing:
         raise ValueError(f"Faltan columnas tras build_features: {missing}")
@@ -88,6 +100,7 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
                 entry = price
                 trades.append({"datetime": dt.isoformat(), "side": "SELL", "price": price, "equity": cash})
 
+        # Mark-to-market simple
         if position == 1 and entry is not None:
             mtm = (price - entry) / entry
             equity.append(cash * (1 + mtm))
@@ -97,6 +110,7 @@ def simulate_backtest(prices: pd.Series, probs: np.ndarray, args) -> tuple[pd.Se
         else:
             equity.append(cash)
 
+    # Cierre al final
     if position != 0 and entry is not None:
         final_price = float(prices.iloc[-1])
         pnl = (final_price - entry) / entry if position == 1 else (entry - final_price) / entry
